@@ -130,6 +130,8 @@ S2N_RESULT s2n_get_mix_entropy(struct s2n_blob *blob)
     return S2N_RESULT_OK;
 }
 
+static S2N_RESULT s2n_register_cleanup_per_thread_rand_state();
+
 static S2N_RESULT s2n_init_drbgs(void)
 {
     uint8_t s2n_public_drbg[] = "s2n public drbg";
@@ -139,6 +141,9 @@ static S2N_RESULT s2n_init_drbgs(void)
 
     RESULT_GUARD(s2n_drbg_instantiate(&s2n_per_thread_rand_state.public_drbg, &public, S2N_AES_128_CTR_NO_DF_PR));
     RESULT_GUARD(s2n_drbg_instantiate(&s2n_per_thread_rand_state.private_drbg, &private, S2N_AES_256_CTR_NO_DF_PR));
+
+    /* Register calling s2n_rand_cleanup_thread() at the current thread's exit. */
+    RESULT_GUARD(s2n_register_cleanup_per_thread_rand_state());
 
     s2n_per_thread_rand_state.drbgs_initialized = true;
 
@@ -181,6 +186,27 @@ static S2N_RESULT s2n_ensure_uniqueness(void)
         RESULT_GUARD(s2n_ensure_initialized_drbgs());
     }
 
+    return S2N_RESULT_OK;
+}
+
+static pthread_key_t s2n_per_thread_rand_state_cleanup_key;
+static pthread_once_t s2n_per_thread_rand_state_cleanup_key_once = PTHREAD_ONCE_INIT;
+
+static void s2n_cleanup_per_thread_rand_state(void *ptr)
+{
+    s2n_rand_cleanup_thread();
+}
+
+static void s2n_make_per_thread_rand_state_cleanup_key()
+{
+    pthread_key_create(&s2n_per_thread_rand_state_cleanup_key, s2n_cleanup_per_thread_rand_state);
+}
+
+/* Register calling s2n_rand_cleanup_thread() at the current thread's exit. */
+static S2N_RESULT s2n_register_cleanup_per_thread_rand_state()
+{
+    RESULT_GUARD_POSIX(pthread_once(&s2n_per_thread_rand_state_cleanup_key_once, s2n_make_per_thread_rand_state_cleanup_key));
+    RESULT_GUARD_POSIX(pthread_setspecific(s2n_per_thread_rand_state_cleanup_key, &s2n_per_thread_rand_state));
     return S2N_RESULT_OK;
 }
 
