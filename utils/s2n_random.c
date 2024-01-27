@@ -264,6 +264,11 @@ static S2N_RESULT s2n_ensure_uniqueness(void)
 }
 
 static S2N_RESULT s2n_get_libcrypto_random_data(struct s2n_blob *out_blob)
+{
+    RESULT_GUARD_PTR(out_blob);
+    RESULT_GUARD_OSSL(RAND_bytes(out_blob->data, out_blob->size), S2N_ERR_DRBG);
+    return S2N_RESULT_OK;
+}
 
 static pthread_key_t s2n_per_thread_rand_state_cleanup_key;
 static pthread_once_t s2n_per_thread_rand_state_cleanup_key_once = PTHREAD_ONCE_INIT;
@@ -283,25 +288,6 @@ static S2N_RESULT s2n_register_cleanup_per_thread_rand_state()
 {
     RESULT_GUARD_POSIX(pthread_once(&s2n_per_thread_rand_state_cleanup_key_once, s2n_make_per_thread_rand_state_cleanup_key));
     RESULT_GUARD_POSIX(pthread_setspecific(s2n_per_thread_rand_state_cleanup_key, &s2n_per_thread_rand_state));
-    return S2N_RESULT_OK;
-}
-
-static void s2n_make_per_thread_rand_state_cleanup_key()
-{
-    pthread_key_create(&s2n_per_thread_rand_state_cleanup_key, s2n_cleanup_per_thread_rand_state);
-}
-
-/* Register calling s2n_rand_cleanup_thread() at the current thread's exit. */
-static S2N_RESULT s2n_register_cleanup_per_thread_rand_state()
-{
-    RESULT_GUARD_POSIX(pthread_once(&s2n_per_thread_rand_state_cleanup_key_once, s2n_make_per_thread_rand_state_cleanup_key));
-    RESULT_GUARD_POSIX(pthread_setspecific(s2n_per_thread_rand_state_cleanup_key, &s2n_per_thread_rand_state));
-    return S2N_RESULT_OK;
-}
-
-{
-    RESULT_GUARD_PTR(out_blob);
-    RESULT_GUARD_OSSL(RAND_bytes(out_blob->data, out_blob->size), S2N_ERR_DRBG);
     return S2N_RESULT_OK;
 }
 
