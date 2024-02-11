@@ -22,6 +22,15 @@
 #include "tls/s2n_connection.h"
 #include "utils/s2n_safety.h"
 
+const struct s2n_signature_scheme s2n_null_sig_scheme = {
+    .iana_value = 0,
+    .hash_alg = S2N_HASH_NONE,
+    .sig_alg = S2N_SIGNATURE_ANONYMOUS,
+    .libcrypto_nid = 0,
+    .signature_curve = NULL,
+    .maximum_protocol_version = 0,
+};
+
 /* RSA PKCS1 */
 const struct s2n_signature_scheme s2n_rsa_pkcs1_md5_sha1 = {
     .iana_value = TLS_SIGNATURE_SCHEME_PRIVATE_INTERNAL_RSA_PKCS1_MD5_SHA1,
@@ -148,6 +157,7 @@ const struct s2n_signature_scheme s2n_ecdsa_secp521r1_sha512 = {
     .iana_value = TLS_SIGNATURE_SCHEME_ECDSA_SECP521R1_SHA512,
     .hash_alg = S2N_HASH_SHA512,
     .sig_alg = S2N_SIGNATURE_ECDSA,
+    .libcrypto_nid = NID_ecdsa_with_SHA512,
     .signature_curve = &s2n_ecc_curve_secp521r1, /* Hardcoded as of TLS 1.3 */
     .minimum_protocol_version = S2N_TLS13,
 };
@@ -280,6 +290,41 @@ const struct s2n_signature_scheme* const s2n_sig_scheme_pref_list_default_fips[]
 const struct s2n_signature_preferences s2n_signature_preferences_default_fips = {
     .count = s2n_array_len(s2n_sig_scheme_pref_list_default_fips),
     .signature_schemes = s2n_sig_scheme_pref_list_default_fips,
+};
+
+/*
+ * FIPS compliant.
+ * Supports TLS1.3.
+ * Prefers PSS over PKCS1.
+ */
+const struct s2n_signature_scheme* const s2n_sig_scheme_pref_list_20230317[] = {
+    /* RSA */
+    &s2n_rsa_pss_rsae_sha256,
+    &s2n_rsa_pss_rsae_sha384,
+    &s2n_rsa_pss_rsae_sha512,
+    &s2n_rsa_pkcs1_sha256,
+    &s2n_rsa_pkcs1_sha384,
+    &s2n_rsa_pkcs1_sha512,
+
+    /* TLS1.2 with ECDSA */
+    &s2n_ecdsa_sha256, /* same iana value as TLS 1.3 s2n_ecdsa_secp256r1_sha256 */
+    &s2n_ecdsa_sha384, /* same iana value as TLS 1.3 s2n_ecdsa_secp384r1_sha384 */
+    &s2n_ecdsa_sha512,
+
+    /* TLS1.3 with ECDSA */
+    &s2n_ecdsa_secp256r1_sha256,
+    &s2n_ecdsa_secp384r1_sha384,
+    &s2n_ecdsa_secp521r1_sha512,
+
+    /* TLS1.3 with RSA-PSS */
+    &s2n_rsa_pss_pss_sha256,
+    &s2n_rsa_pss_pss_sha384,
+    &s2n_rsa_pss_pss_sha512,
+};
+
+const struct s2n_signature_preferences s2n_signature_preferences_20230317 = {
+    .count = s2n_array_len(s2n_sig_scheme_pref_list_20230317),
+    .signature_schemes = s2n_sig_scheme_pref_list_20230317,
 };
 
 /* Add s2n_ecdsa_secp521r1_sha512 */

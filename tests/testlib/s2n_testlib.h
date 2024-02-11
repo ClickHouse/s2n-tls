@@ -75,6 +75,7 @@ int s2n_connection_allow_response_extension(struct s2n_connection *conn, uint16_
 int s2n_connection_allow_all_response_extensions(struct s2n_connection *conn);
 int s2n_connection_set_all_protocol_versions(struct s2n_connection *conn, uint8_t version);
 S2N_RESULT s2n_set_all_mutually_supported_groups(struct s2n_connection *conn);
+S2N_RESULT s2n_skip_handshake(struct s2n_connection *conn);
 
 S2N_RESULT s2n_connection_set_secrets(struct s2n_connection *conn);
 
@@ -103,10 +104,12 @@ S2N_RESULT s2n_connection_set_test_master_secret(struct s2n_connection *conn, co
 #define S2N_RSA_2048_PKCS1_LEAF_CERT    "../pems/rsa_2048_pkcs1_leaf.pem"
 #define S2N_ECDSA_P256_PKCS1_CERT_CHAIN "../pems/ecdsa_p256_pkcs1_cert.pem"
 #define S2N_ECDSA_P384_PKCS1_CERT_CHAIN "../pems/ecdsa_p384_pkcs1_cert.pem"
+#define S2N_ECDSA_P512_CERT_CHAIN       "../pems/ecdsa_p521_cert.pem"
 #define S2N_RSA_CERT_CHAIN_CRLF         "../pems/rsa_2048_pkcs1_cert_crlf.pem"
 #define S2N_RSA_KEY_CRLF                "../pems/rsa_2048_pkcs1_key_crlf.pem"
 #define S2N_ECDSA_P256_PKCS1_KEY        "../pems/ecdsa_p256_pkcs1_key.pem"
 #define S2N_ECDSA_P384_PKCS1_KEY        "../pems/ecdsa_p384_pkcs1_key.pem"
+#define S2N_ECDSA_P512_KEY              "../pems/ecdsa_p521_key.pem"
 #define S2N_RSA_2048_PKCS1_KEY          "../pems/rsa_2048_pkcs1_key.pem"
 #define S2N_RSA_2048_PKCS8_KEY          "../pems/rsa_2048_pkcs8_key.pem"
 
@@ -132,6 +135,12 @@ S2N_RESULT s2n_connection_set_test_master_secret(struct s2n_connection *conn, co
 /* Missing line endings between PEM encapsulation boundaries */
 #define S2N_MISSING_LINE_ENDINGS_CERT_CHAIN "../pems/rsa_2048_missing_line_endings_cert.pem"
 
+/* PEMs with invalid timestamp fields */
+#define S2N_EXPIRED_CERT_CHAIN       "../pems/rsa_2048_expired_cert.pem"
+#define S2N_EXPIRED_KEY              "../pems/rsa_2048_expired_key.pem"
+#define S2N_NOT_YET_VALID_CERT_CHAIN "../pems/rsa_2048_not_yet_valid_cert.pem"
+#define S2N_NOT_YET_VALID_KEY        "../pems/rsa_2048_not_yet_valid_key.pem"
+
 /* Illegally formatted PEMs */
 #define S2N_INVALID_HEADER_CERT_CHAIN  "../pems/rsa_2048_invalid_header_cert.pem"
 #define S2N_INVALID_TRAILER_CERT_CHAIN "../pems/rsa_2048_invalid_trailer_cert.pem"
@@ -143,13 +152,15 @@ S2N_RESULT s2n_connection_set_test_master_secret(struct s2n_connection *conn, co
 #define S2N_NO_DASHES_CERT_CHAIN       "../pems/rsa_2048_no_dashes_cert.pem"
 
 /* OCSP Stapled Response Testing files */
-#define S2N_OCSP_SERVER_CERT       "../pems/ocsp/server_cert.pem"
-#define S2N_OCSP_SERVER_ECDSA_CERT "../pems/ocsp/server_ecdsa_cert.pem"
+#define S2N_OCSP_SERVER_CERT              "../pems/ocsp/server_cert.pem"
+#define S2N_OCSP_SERVER_CERT_EARLY_EXPIRE "../pems/ocsp/server_cert_early_expire.pem"
+#define S2N_OCSP_SERVER_ECDSA_CERT        "../pems/ocsp/server_ecdsa_cert.pem"
 
 #define S2N_OCSP_SERVER_KEY                  "../pems/ocsp/server_key.pem"
 #define S2N_OCSP_CA_CERT                     "../pems/ocsp/ca_cert.pem"
 #define S2N_OCSP_CA_KEY                      "../pems/ocsp/ca_key.pem"
 #define S2N_OCSP_RESPONSE_DER                "../pems/ocsp/ocsp_response.der"
+#define S2N_OCSP_RESPONSE_EARLY_EXPIRE_DER   "../pems/ocsp/ocsp_response_early_expire.der"
 #define S2N_OCSP_RESPONSE_NO_NEXT_UPDATE_DER "../pems/ocsp/ocsp_response_no_next_update.der"
 #define S2N_OCSP_RESPONSE_REVOKED_DER        "../pems/ocsp/ocsp_response_revoked.der"
 #define S2N_OCSP_RESPONSE_WRONG_SIGNER_DER   "../pems/ocsp/ocsp_response_wrong_signer.der"
@@ -196,6 +207,18 @@ S2N_RESULT s2n_negotiate_test_server_and_client_until_message(struct s2n_connect
 int s2n_shutdown_test_server_and_client(struct s2n_connection *server_conn, struct s2n_connection *client_conn);
 S2N_RESULT s2n_negotiate_test_server_and_client_with_early_data(struct s2n_connection *server_conn,
         struct s2n_connection *client_conn, struct s2n_blob *early_data_to_send, struct s2n_blob *early_data_received);
+
+/* Testing only with easily constructed contiguous data buffers could hide errors.
+ * We should use iovecs where every buffer is allocated separately.
+ * These test methods construct separate io buffers from one contiguous buffer.
+ */
+struct s2n_test_iovecs {
+    struct iovec *iovecs;
+    size_t iovecs_count;
+};
+S2N_RESULT s2n_test_new_iovecs(struct s2n_test_iovecs *iovecs,
+        struct s2n_blob *data, const size_t *lens, size_t lens_count);
+S2N_CLEANUP_RESULT s2n_test_iovecs_free(struct s2n_test_iovecs *in);
 
 struct s2n_kem_kat_test_vector {
     const struct s2n_kem *kem;

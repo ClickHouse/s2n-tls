@@ -45,6 +45,10 @@
 #define OPT_PREFER_THROUGHPUT  1006
 #define OPT_BUFFERED_SEND      1007
 
+/*
+ * s2nc is an example client that uses many s2n-tls APIs.
+ * It is intended for testing purposes only, and should not be used in production.
+ */
 void usage()
 {
     /* clang-format off */
@@ -69,7 +73,6 @@ void usage()
     fprintf(stderr, "  -n [server name]\n");
     fprintf(stderr, "  --name [server name]\n");
     fprintf(stderr, "    Sets the SNI server name header for this client.  If not specified, the host value is used.\n");
-    fprintf(stderr, "\n");
     fprintf(stderr, "  -s,--status\n");
     fprintf(stderr, "    Request the OCSP status of the remote server certificate\n");
     fprintf(stderr, "  -m,--mfl\n");

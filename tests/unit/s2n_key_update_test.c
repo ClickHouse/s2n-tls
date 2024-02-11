@@ -172,7 +172,7 @@ int main(int argc, char **argv)
             EXPECT_NOT_NULL(server_conn = s2n_connection_new(S2N_SERVER));
             server_conn->actual_protocol_version = S2N_TLS13;
             server_conn->secure->cipher_suite = cipher_suite_with_limit;
-            POSIX_CHECKED_MEMCPY(server_conn->secrets.tls13.client_app_secret, application_secret.data, application_secret.size);
+            POSIX_CHECKED_MEMCPY(server_conn->secrets.version.tls13.client_app_secret, application_secret.data, application_secret.size);
 
             server_conn->secure->client_sequence_number[0] = 1;
             /* Write the key update request to the correct stuffer */
@@ -180,7 +180,7 @@ int main(int argc, char **argv)
 
             EXPECT_SUCCESS(s2n_key_update_recv(server_conn, &input));
             EXPECT_EQUAL(server_conn->secure->client_sequence_number[0], 0);
-            EXPECT_EQUAL(server_conn->key_update_pending, S2N_KEY_UPDATE_NOT_REQUESTED);
+            EXPECT_FALSE(s2n_atomic_flag_test(&server_conn->key_update_pending));
 
             EXPECT_SUCCESS(s2n_connection_free(server_conn));
         };
@@ -194,7 +194,7 @@ int main(int argc, char **argv)
             EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_with_limit;
-            POSIX_CHECKED_MEMCPY(client_conn->secrets.tls13.server_app_secret, application_secret.data, application_secret.size);
+            POSIX_CHECKED_MEMCPY(client_conn->secrets.version.tls13.server_app_secret, application_secret.data, application_secret.size);
 
             client_conn->secure->server_sequence_number[0] = 1;
             /* Write the key update request to the correct stuffer */
@@ -202,9 +202,57 @@ int main(int argc, char **argv)
 
             EXPECT_SUCCESS(s2n_key_update_recv(client_conn, &input));
             EXPECT_EQUAL(client_conn->secure->server_sequence_number[0], 0);
-            EXPECT_EQUAL(client_conn->key_update_pending, S2N_KEY_UPDATE_NOT_REQUESTED);
+            EXPECT_FALSE(s2n_atomic_flag_test(&client_conn->key_update_pending));
 
             EXPECT_SUCCESS(s2n_connection_free(client_conn));
+        };
+
+        /* Receiving a KeyUpdate request sets key_update_pending */
+        {
+            DEFER_CLEANUP(struct s2n_stuffer input, s2n_stuffer_free);
+            EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&input, 0));
+
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_SERVER),
+                    s2n_connection_ptr_free);
+            EXPECT_NOT_NULL(conn);
+            conn->actual_protocol_version = S2N_TLS13;
+            conn->secure->cipher_suite = cipher_suite_with_limit;
+
+            /* KeyUpdate not pending */
+            s2n_atomic_flag_clear(&conn->key_update_pending);
+
+            /* KeyUpdate received */
+            conn->secure->client_sequence_number[0] = 1;
+            EXPECT_SUCCESS(s2n_stuffer_write_uint8(&input, S2N_KEY_UPDATE_REQUESTED));
+            EXPECT_SUCCESS(s2n_key_update_recv(conn, &input));
+            EXPECT_EQUAL(conn->secure->client_sequence_number[0], 0);
+
+            /* KeyUpdate pending */
+            EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
+        };
+
+        /* Receiving a KeyUpdate cannot reset key_update_pending */
+        {
+            DEFER_CLEANUP(struct s2n_stuffer input, s2n_stuffer_free);
+            EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&input, 0));
+
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_SERVER),
+                    s2n_connection_ptr_free);
+            EXPECT_NOT_NULL(conn);
+            conn->actual_protocol_version = S2N_TLS13;
+            conn->secure->cipher_suite = cipher_suite_with_limit;
+
+            /* KeyUpdate already pending */
+            s2n_atomic_flag_set(&conn->key_update_pending);
+
+            /* KeyUpdate received */
+            conn->secure->client_sequence_number[0] = 1;
+            EXPECT_SUCCESS(s2n_stuffer_write_uint8(&input, S2N_KEY_UPDATE_NOT_REQUESTED));
+            EXPECT_SUCCESS(s2n_key_update_recv(conn, &input));
+            EXPECT_EQUAL(conn->secure->client_sequence_number[0], 0);
+
+            /* KeyUpdate still pending */
+            EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
         };
     };
 
@@ -216,19 +264,19 @@ int main(int argc, char **argv)
             EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_with_limit;
-            POSIX_CHECKED_MEMCPY(client_conn->secrets.tls13.client_app_secret, application_secret.data, application_secret.size);
+            POSIX_CHECKED_MEMCPY(client_conn->secrets.version.tls13.client_app_secret, application_secret.data, application_secret.size);
 
             /* Setup io */
             struct s2n_stuffer stuffer = { 0 };
             EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&stuffer, 0));
             EXPECT_SUCCESS(s2n_connection_set_io_stuffers(&stuffer, &stuffer, client_conn));
 
-            client_conn->key_update_pending = true;
+            s2n_atomic_flag_set(&client_conn->key_update_pending);
 
             s2n_blocked_status blocked = 0;
             EXPECT_SUCCESS(s2n_key_update_send(client_conn, &blocked));
 
-            EXPECT_EQUAL(client_conn->key_update_pending, false);
+            EXPECT_EQUAL(s2n_atomic_flag_test(&client_conn->key_update_pending), false);
             EXPECT_BYTEARRAY_EQUAL(client_conn->secure->client_sequence_number, zeroed_sequence_number, S2N_TLS_SEQUENCE_NUM_LEN);
             EXPECT_TRUE(s2n_stuffer_data_available(&stuffer) > 0);
 
@@ -242,25 +290,52 @@ int main(int argc, char **argv)
             EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_with_limit;
-            POSIX_CHECKED_MEMCPY(client_conn->secrets.tls13.client_app_secret, application_secret.data, application_secret.size);
+            POSIX_CHECKED_MEMCPY(client_conn->secrets.version.tls13.client_app_secret, application_secret.data, application_secret.size);
 
             /* Setup io */
             struct s2n_stuffer stuffer = { 0 };
             EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&stuffer, 0));
             EXPECT_SUCCESS(s2n_connection_set_io_stuffers(&stuffer, &stuffer, client_conn));
 
-            client_conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&client_conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(record_limit, client_conn->secure->client_sequence_number));
 
             s2n_blocked_status blocked = 0;
             EXPECT_SUCCESS(s2n_key_update_send(client_conn, &blocked));
 
-            EXPECT_EQUAL(client_conn->key_update_pending, false);
+            EXPECT_EQUAL(s2n_atomic_flag_test(&client_conn->key_update_pending), false);
             EXPECT_BYTEARRAY_EQUAL(client_conn->secure->client_sequence_number, zeroed_sequence_number, S2N_TLS_SEQUENCE_NUM_LEN);
             EXPECT_TRUE(s2n_stuffer_data_available(&stuffer) > 0);
 
             EXPECT_SUCCESS(s2n_stuffer_free(&stuffer));
             EXPECT_SUCCESS(s2n_connection_free(client_conn));
+        };
+
+        /* Key update never sent for <TLS1.3, even if requested / required */
+        {
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_CLIENT),
+                    s2n_connection_ptr_free);
+            conn->actual_protocol_version = S2N_TLS12;
+            conn->secure->cipher_suite = cipher_suite_with_limit;
+            POSIX_CHECKED_MEMCPY(conn->secrets.version.tls13.client_app_secret,
+                    application_secret.data, application_secret.size);
+
+            /* Setup io */
+            DEFER_CLEANUP(struct s2n_stuffer stuffer = { 0 }, s2n_stuffer_free);
+            EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&stuffer, 0));
+            EXPECT_SUCCESS(s2n_connection_set_io_stuffers(&stuffer, &stuffer, conn));
+
+            /* Key update both pending and required by record limit */
+            s2n_atomic_flag_set(&conn->key_update_pending);
+            EXPECT_OK(s2n_write_uint64(record_limit, conn->secure->client_sequence_number));
+
+            s2n_blocked_status blocked = 0;
+            EXPECT_FAILURE_WITH_ERRNO(s2n_key_update_send(conn, &blocked), S2N_ERR_SAFETY);
+
+            /* Sequence number not reset and no KeyUpdate sent */
+            EXPECT_BYTEARRAY_NOT_EQUAL(conn->secure->client_sequence_number,
+                    zeroed_sequence_number, S2N_TLS_SEQUENCE_NUM_LEN);
+            EXPECT_EQUAL(s2n_stuffer_data_available(&stuffer), 0);
         };
 
         /* Key update is not triggered */
@@ -269,7 +344,7 @@ int main(int argc, char **argv)
             EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_with_limit;
-            POSIX_CHECKED_MEMCPY(client_conn->secrets.tls13.client_app_secret, application_secret.data, application_secret.size);
+            POSIX_CHECKED_MEMCPY(client_conn->secrets.version.tls13.client_app_secret, application_secret.data, application_secret.size);
             uint8_t expected_sequence_number[S2N_TLS_SEQUENCE_NUM_LEN] = { 0 };
 
             /* Setup io */
@@ -279,12 +354,12 @@ int main(int argc, char **argv)
 
             client_conn->secure->client_sequence_number[LOWEST_BYTE] = 1;
             expected_sequence_number[LOWEST_BYTE] = 1;
-            client_conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&client_conn->key_update_pending);
 
             s2n_blocked_status blocked = 0;
             EXPECT_SUCCESS(s2n_key_update_send(client_conn, &blocked));
 
-            EXPECT_EQUAL(client_conn->key_update_pending, false);
+            EXPECT_EQUAL(s2n_atomic_flag_test(&client_conn->key_update_pending), false);
             EXPECT_BYTEARRAY_EQUAL(client_conn->secure->client_sequence_number, expected_sequence_number, S2N_TLS_SEQUENCE_NUM_LEN);
             EXPECT_TRUE(s2n_stuffer_data_available(&stuffer) == 0);
 
@@ -302,7 +377,7 @@ int main(int argc, char **argv)
             EXPECT_NOT_NULL(client_conn);
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_with_limit;
-            POSIX_CHECKED_MEMCPY(client_conn->secrets.tls13.client_app_secret, application_secret.data, application_secret.size);
+            POSIX_CHECKED_MEMCPY(client_conn->secrets.version.tls13.client_app_secret, application_secret.data, application_secret.size);
 
             /* Setup io */
             DEFER_CLEANUP(struct s2n_stuffer stuffer = { 0 }, s2n_stuffer_free);
@@ -340,7 +415,7 @@ int main(int argc, char **argv)
             EXPECT_NOT_NULL(client_conn);
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_without_limit;
-            POSIX_CHECKED_MEMCPY(client_conn->secrets.tls13.client_app_secret, application_secret.data, application_secret.size);
+            POSIX_CHECKED_MEMCPY(client_conn->secrets.version.tls13.client_app_secret, application_secret.data, application_secret.size);
 
             /* Setup io */
             DEFER_CLEANUP(struct s2n_stuffer stuffer = { 0 }, s2n_stuffer_free);
@@ -382,39 +457,39 @@ int main(int argc, char **argv)
             conn->secure->cipher_suite = cipher_suite_with_limit;
 
             /* Not at limit yet: no records sent */
-            conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(0, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_FALSE(conn->key_update_pending);
+            EXPECT_FALSE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* Not at limit yet: 2 records less than limit */
-            conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(record_limit - 2, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_FALSE(conn->key_update_pending);
+            EXPECT_FALSE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* 1 record less than limit */
-            conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(record_limit - 1, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_FALSE(conn->key_update_pending);
+            EXPECT_FALSE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* Limit */
-            conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(record_limit, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_TRUE(conn->key_update_pending);
+            EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* Don't reset the key_update_pending flag if already set */
             EXPECT_OK(s2n_write_uint64(0, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_TRUE(conn->key_update_pending);
+            EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* Over limit */
-            conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(record_limit + 1, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_TRUE(conn->key_update_pending);
+            EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
         };
 
         /* No record encryption limit (CHACHA20) */
@@ -428,33 +503,33 @@ int main(int argc, char **argv)
             conn->secure->cipher_suite = cipher_suite_without_limit;
 
             /* Not at limit yet: no records sent */
-            conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(0, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_FALSE(conn->key_update_pending);
+            EXPECT_FALSE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* Not at limit yet: 2 records less than limit */
-            conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(UINT64_MAX - 2, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_FALSE(conn->key_update_pending);
+            EXPECT_FALSE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* 1 record less than limit */
-            conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(UINT64_MAX - 1, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_FALSE(conn->key_update_pending);
+            EXPECT_FALSE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* Limit */
-            conn->key_update_pending = false;
+            s2n_atomic_flag_clear(&conn->key_update_pending);
             EXPECT_OK(s2n_write_uint64(UINT64_MAX, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_TRUE(conn->key_update_pending);
+            EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* Don't reset the key_update_pending flag if already set */
             EXPECT_OK(s2n_write_uint64(0, sequence_number_bytes));
             EXPECT_SUCCESS(s2n_check_record_limit(conn, &sequence_number));
-            EXPECT_TRUE(conn->key_update_pending);
+            EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
 
             /* Over limit not possible: limit is maximum value */
         };
@@ -478,6 +553,7 @@ int main(int argc, char **argv)
 
             DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_SERVER), s2n_connection_ptr_free);
             EXPECT_OK(s2n_connection_set_secrets(conn));
+            conn->actual_protocol_version = S2N_TLS13;
 
             DEFER_CLEANUP(struct s2n_stuffer stuffer = { 0 }, s2n_stuffer_free);
             EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&stuffer, 0));
@@ -486,7 +562,7 @@ int main(int argc, char **argv)
             /* Sanity check: send buffer just large enough for KeyUpdate record */
             config->send_buffer_size_override = key_update_record_size;
             EXPECT_SUCCESS(s2n_connection_set_config(conn, config));
-            conn->key_update_pending = true;
+            s2n_atomic_flag_set(&conn->key_update_pending);
             EXPECT_SUCCESS(s2n_key_update_send(conn, &blocked));
 
             EXPECT_SUCCESS(s2n_connection_release_buffers(conn));
@@ -494,7 +570,7 @@ int main(int argc, char **argv)
             /* Test: send buffer too small for KeyUpdate record */
             config->send_buffer_size_override = key_update_record_size - 1;
             EXPECT_SUCCESS(s2n_connection_set_config(conn, config));
-            conn->key_update_pending = true;
+            s2n_atomic_flag_set(&conn->key_update_pending);
             EXPECT_FAILURE_WITH_ERRNO(s2n_key_update_send(conn, &blocked), S2N_ERR_FRAGMENT_LENGTH_TOO_LARGE);
         };
     };

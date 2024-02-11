@@ -13,6 +13,7 @@ use std::{
     ffi::{c_void, CString},
     path::Path,
     sync::atomic::{AtomicUsize, Ordering},
+    time::{Duration, SystemTime},
 };
 
 #[derive(Debug, PartialEq)]
@@ -47,7 +48,7 @@ impl Config {
     /// This config _MUST_ have been initialized with a [`Builder`].
     /// Additionally, this does NOT increment the config reference count,
     /// so consider cloning the result if the source pointer is still
-    /// valid and useable afterwards.
+    /// valid and usable afterwards.
     pub(crate) unsafe fn from_raw(config: NonNull<s2n_config>) -> Self {
         let config = Self(config);
 
@@ -149,12 +150,16 @@ impl Drop for Config {
 }
 
 #[derive(Default)]
-pub struct Builder(Config);
+pub struct Builder {
+    config: Config,
+    load_system_certs: bool,
+    enable_ocsp: bool,
+}
 
 impl Builder {
     pub fn new() -> Self {
         crate::init::init();
-        let config = unsafe { s2n_config_new().into_result() }.unwrap();
+        let config = unsafe { s2n_config_new_minimal().into_result() }.unwrap();
 
         let context = Box::<Context>::default();
         let context = Box::into_raw(context) as *mut c_void;
@@ -175,7 +180,11 @@ impl Builder {
             .unwrap();
         }
 
-        Self(Config(config))
+        Self {
+            config: Config(config),
+            load_system_certs: true,
+            enable_ocsp: false,
+        }
     }
 
     pub fn set_alert_behavior(&mut self, value: AlertBehavior) -> Result<&mut Self, Error> {
@@ -264,6 +273,16 @@ impl Builder {
         Ok(self)
     }
 
+    pub fn load_public_pem(&mut self, certificate: &[u8]) -> Result<&mut Self, Error> {
+        let size: u32 = certificate
+            .len()
+            .try_into()
+            .map_err(|_| Error::INVALID_INPUT)?;
+        let certificate = certificate.as_ptr() as *mut u8;
+        unsafe { s2n_config_add_cert_chain(self.as_mut_ptr(), certificate, size) }.into_result()?;
+        Ok(self)
+    }
+
     pub fn trust_pem(&mut self, certificate: &[u8]) -> Result<&mut Self, Error> {
         let certificate = CString::new(certificate).map_err(|_| Error::INVALID_INPUT)?;
         unsafe {
@@ -272,6 +291,10 @@ impl Builder {
         Ok(self)
     }
 
+    /// Adds to the trust store from a CA file or directory containing trusted certificates.
+    ///
+    /// NOTE: This function is equivalent to `s2n_config_set_verification_ca_location` except it does
+    /// not automatically enable the client to request OCSP stapling from the server.
     pub fn trust_location(
         &mut self,
         file: Option<&Path>,
@@ -304,6 +327,25 @@ impl Builder {
             s2n_config_set_verification_ca_location(self.as_mut_ptr(), file_ptr, dir_ptr)
                 .into_result()
         }?;
+
+        // If OCSP has not been explicitly requested, turn off OCSP. This is to prevent this function from
+        // automatically enabling `OCSP` due to the legacy behavior of `s2n_config_set_verification_ca_location`
+        if !self.enable_ocsp {
+            unsafe {
+                s2n_config_set_status_request_type(self.as_mut_ptr(), s2n_status_request_type::NONE)
+                    .into_result()?
+            };
+        }
+
+        Ok(self)
+    }
+
+    /// Sets whether or not default system certificates will be loaded into the trust store.
+    ///
+    /// Set to false for increased performance if system certificates are not needed during
+    /// certificate validation.
+    pub fn with_system_certs(&mut self, load_system_certs: bool) -> Result<&mut Self, Error> {
+        self.load_system_certs = load_system_certs;
         Ok(self)
     }
 
@@ -328,6 +370,7 @@ impl Builder {
             s2n_config_set_status_request_type(self.as_mut_ptr(), s2n_status_request_type::OCSP)
                 .into_result()
         }?;
+        self.enable_ocsp = true;
         Ok(self)
     }
 
@@ -355,38 +398,34 @@ impl Builder {
         self.enable_ocsp()
     }
 
-    /// Set a custom callback function which is run during client certificate validation during
-    /// a mutual TLS handshake.
+    /// Sets the callback to use for verifying that a hostname from an X.509 certificate is
+    /// trusted.
     ///
     /// The callback may be called more than once during certificate validation as each SAN on
     /// the certificate will be checked.
+    ///
+    /// Corresponds to the underlying C API
+    /// [s2n_config_set_verify_host_callback](https://aws.github.io/s2n-tls/doxygen/s2n_8h.html).
     pub fn set_verify_host_callback<T: 'static + VerifyHostNameCallback>(
         &mut self,
         handler: T,
     ) -> Result<&mut Self, Error> {
-        unsafe extern "C" fn verify_host_cb(
+        unsafe extern "C" fn verify_host_cb_fn(
             host_name: *const ::libc::c_char,
             host_name_len: usize,
             context: *mut ::libc::c_void,
         ) -> u8 {
-            let host_name = host_name as *const u8;
-            let host_name = core::slice::from_raw_parts(host_name, host_name_len);
-            if let Ok(host_name_str) = core::str::from_utf8(host_name) {
-                let context = &mut *(context as *mut Context);
-                let handler = context.verify_host_callback.as_mut().unwrap();
-                return handler.verify_host_name(host_name_str) as u8;
-            }
-            0 // If the host name can't be parsed, fail closed.
+            let context = &mut *(context as *mut Context);
+            let handler = context.verify_host_callback.as_mut().unwrap();
+            verify_host(host_name, host_name_len, handler)
         }
 
-        let handler = Box::new(handler);
-        let context = self.0.context_mut();
-        context.verify_host_callback = Some(handler);
+        self.config.context_mut().verify_host_callback = Some(Box::new(handler));
         unsafe {
             s2n_config_set_verify_host_callback(
                 self.as_mut_ptr(),
-                Some(verify_host_cb),
-                self.0.context_mut() as *mut _ as *mut c_void,
+                Some(verify_host_cb_fn),
+                self.config.context_mut() as *mut Context as *mut c_void,
             )
             .into_result()?;
         }
@@ -424,13 +463,18 @@ impl Builder {
             connection_ptr: *mut s2n_connection,
             _context: *mut core::ffi::c_void,
         ) -> libc::c_int {
-            with_connection(connection_ptr, |conn| {
-                trigger_async_client_hello_callback(conn).into()
+            with_context(connection_ptr, |conn, context| {
+                let callback = context.client_hello_callback.as_ref();
+                let future = callback
+                    .map(|c| c.on_client_hello(conn))
+                    .unwrap_or(Ok(None));
+                AsyncCallback::trigger_client_hello_cb(future, conn)
             })
+            .into()
         }
 
         let handler = Box::new(handler);
-        let context = self.0.context_mut();
+        let context = self.config.context_mut();
         context.client_hello_callback = Some(handler);
 
         unsafe {
@@ -442,6 +486,74 @@ impl Builder {
             .into_result()?;
         }
 
+        Ok(self)
+    }
+
+    /// Sets a custom callback which provides access to session tickets when they arrive
+    pub fn set_session_ticket_callback<T: 'static + SessionTicketCallback>(
+        &mut self,
+        handler: T,
+    ) -> Result<&mut Self, Error> {
+        // Define C callback function that can be set on the s2n_config struct
+        unsafe extern "C" fn session_ticket_cb(
+            conn_ptr: *mut s2n_connection,
+            _context: *mut ::libc::c_void,
+            session_ticket: *mut s2n_session_ticket,
+        ) -> libc::c_int {
+            let session_ticket = SessionTicket::from_ptr(&*session_ticket);
+            with_context(conn_ptr, |conn, context| {
+                let callback = context.session_ticket_callback.as_ref();
+                callback.map(|c| c.on_session_ticket(conn, session_ticket))
+            });
+            CallbackResult::Success.into()
+        }
+
+        // Store callback in context
+        let handler = Box::new(handler);
+        let context = self.config.context_mut();
+        context.session_ticket_callback = Some(handler);
+
+        unsafe {
+            s2n_config_set_session_ticket_cb(
+                self.as_mut_ptr(),
+                Some(session_ticket_cb),
+                self.config.context_mut() as *mut Context as *mut c_void,
+            )
+            .into_result()
+        }?;
+        Ok(self)
+    }
+
+    /// Set a callback function triggered by operations requiring the private key.
+    ///
+    /// See https://github.com/aws/s2n-tls/blob/main/docs/USAGE-GUIDE.md#private-key-operation-related-calls
+    pub fn set_private_key_callback<T: 'static + PrivateKeyCallback>(
+        &mut self,
+        handler: T,
+    ) -> Result<&mut Self, Error> {
+        unsafe extern "C" fn private_key_cb(
+            conn_ptr: *mut s2n_connection,
+            op_ptr: *mut s2n_async_pkey_op,
+        ) -> libc::c_int {
+            with_context(conn_ptr, |conn, context| {
+                let state = PrivateKeyOperation::try_from_cb(conn, op_ptr);
+                let callback = context.private_key_callback.as_ref();
+                let future_result = state.and_then(|state| {
+                    callback.map_or(Ok(None), |callback| callback.handle_operation(conn, state))
+                });
+                AsyncCallback::trigger(future_result, conn)
+            })
+            .into()
+        }
+
+        let handler = Box::new(handler);
+        let context = self.config.context_mut();
+        context.private_key_callback = Some(handler);
+
+        unsafe {
+            s2n_config_set_async_pkey_callback(self.as_mut_ptr(), Some(private_key_cb))
+                .into_result()?;
+        }
         Ok(self)
     }
 
@@ -469,13 +581,13 @@ impl Builder {
         }
 
         let handler = Box::new(handler);
-        let context = self.0.context_mut();
+        let context = self.config.context_mut();
         context.wall_clock = Some(handler);
         unsafe {
             s2n_config_set_wall_clock(
                 self.as_mut_ptr(),
                 Some(clock_cb),
-                self.0.context_mut() as *mut _ as *mut c_void,
+                self.config.context_mut() as *mut _ as *mut c_void,
             )
             .into_result()?;
         }
@@ -506,25 +618,104 @@ impl Builder {
         }
 
         let handler = Box::new(handler);
-        let context = self.0.context_mut();
+        let context = self.config.context_mut();
         context.monotonic_clock = Some(handler);
         unsafe {
             s2n_config_set_monotonic_clock(
                 self.as_mut_ptr(),
                 Some(clock_cb),
-                self.0.context_mut() as *mut _ as *mut c_void,
+                self.config.context_mut() as *mut _ as *mut c_void,
             )
             .into_result()?;
         }
         Ok(self)
     }
 
-    pub fn build(self) -> Result<Config, Error> {
-        Ok(self.0)
+    /// Enable negotiating session tickets in a TLS connection
+    pub fn enable_session_tickets(&mut self, enable: bool) -> Result<&mut Self, Error> {
+        unsafe {
+            s2n_config_set_session_tickets_onoff(self.as_mut_ptr(), enable.into()).into_result()
+        }?;
+        Ok(self)
+    }
+
+    /// Adds a key which will be used to encrypt and decrypt session tickets. The intro_time parameter is time since
+    /// the Unix epoch (Midnight, January 1st, 1970). The key must be at least 16 bytes.
+    pub fn add_session_ticket_key(
+        &mut self,
+        key_name: &[u8],
+        key: &[u8],
+        intro_time: SystemTime,
+    ) -> Result<&mut Self, Error> {
+        let key_name_len: u32 = key_name
+            .len()
+            .try_into()
+            .map_err(|_| Error::INVALID_INPUT)?;
+        let key_len: u32 = key.len().try_into().map_err(|_| Error::INVALID_INPUT)?;
+        let intro_time = intro_time
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| Error::INVALID_INPUT)?;
+        // Ticket keys should be at least 128 bits in strength
+        // https://www.rfc-editor.org/rfc/rfc5077#section-5.5
+        if key_len < 16 {
+            return Err(Error::INVALID_INPUT);
+        }
+        self.enable_session_tickets(true)?;
+        unsafe {
+            s2n_config_add_ticket_crypto_key(
+                self.as_mut_ptr(),
+                key_name.as_ptr(),
+                key_name_len,
+                // s2n-tls doesn't mutate key, it's just mut for easier use with stuffers and blobs
+                key.as_ptr() as *mut u8,
+                key_len,
+                intro_time.as_secs(),
+            )
+            .into_result()
+        }?;
+        Ok(self)
+    }
+
+    // Sets how long a session ticket key will be able to be used for both encryption
+    // and decryption of tickets
+    pub fn set_ticket_key_encrypt_decrypt_lifetime(
+        &mut self,
+        lifetime: Duration,
+    ) -> Result<&mut Self, Error> {
+        unsafe {
+            s2n_config_set_ticket_encrypt_decrypt_key_lifetime(
+                self.as_mut_ptr(),
+                lifetime.as_secs(),
+            )
+            .into_result()
+        }?;
+        Ok(self)
+    }
+
+    // Sets how long a session ticket key will be able to be used for only decryption
+    pub fn set_ticket_key_decrypt_lifetime(
+        &mut self,
+        lifetime: Duration,
+    ) -> Result<&mut Self, Error> {
+        unsafe {
+            s2n_config_set_ticket_decrypt_key_lifetime(self.as_mut_ptr(), lifetime.as_secs())
+                .into_result()
+        }?;
+        Ok(self)
+    }
+
+    pub fn build(mut self) -> Result<Config, Error> {
+        if self.load_system_certs {
+            unsafe {
+                s2n_config_load_system_certs(self.as_mut_ptr()).into_result()?;
+            }
+        }
+
+        Ok(self.config)
     }
 
     fn as_mut_ptr(&mut self) -> *mut s2n_config {
-        self.0.as_mut_ptr()
+        self.config.as_mut_ptr()
     }
 }
 
@@ -539,7 +730,9 @@ impl Builder {
 pub(crate) struct Context {
     refcount: AtomicUsize,
     pub(crate) client_hello_callback: Option<Box<dyn ClientHelloCallback>>,
+    pub(crate) private_key_callback: Option<Box<dyn PrivateKeyCallback>>,
     pub(crate) verify_host_callback: Option<Box<dyn VerifyHostNameCallback>>,
+    pub(crate) session_ticket_callback: Option<Box<dyn SessionTicketCallback>>,
     pub(crate) wall_clock: Option<Box<dyn WallClock>>,
     pub(crate) monotonic_clock: Option<Box<dyn MonotonicClock>>,
 }
@@ -553,7 +746,9 @@ impl Default for Context {
         Self {
             refcount,
             client_hello_callback: None,
+            private_key_callback: None,
             verify_host_callback: None,
+            session_ticket_callback: None,
             wall_clock: None,
             monotonic_clock: None,
         }

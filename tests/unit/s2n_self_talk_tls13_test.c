@@ -74,7 +74,7 @@ void mock_client(struct s2n_test_io_pair *io_pair)
     /* Active application bytes consumed is reset to 0 in before writing data. */
     /* Its value should equal to bytes written after writing */
     ssize_t bytes_written = s2n_send(conn, buffer, i, &blocked);
-    if (bytes_written != conn->active_application_bytes_consumed) {
+    if ((uint64_t) bytes_written != conn->active_application_bytes_consumed) {
         exit(1);
     }
 
@@ -91,7 +91,7 @@ void mock_client(struct s2n_test_io_pair *io_pair)
 
     s2n_io_pair_close_one_end(io_pair, S2N_CLIENT);
 
-    _exit(0);
+    exit(0);
 }
 
 int main(int argc, char **argv)
@@ -138,6 +138,7 @@ int main(int argc, char **argv)
 
     /* Negotiate the handshake. */
     EXPECT_SUCCESS(s2n_negotiate(conn, &blocked));
+    EXPECT_NOT_NULL(s2n_connection_get_client_hello(conn));
     EXPECT_EQUAL(conn->actual_protocol_version, s2n_get_highest_fully_supported_tls_version());
 
     char buffer[0xffff];

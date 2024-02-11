@@ -42,6 +42,12 @@ int s2n_disable_atexit(void)
     return S2N_SUCCESS;
 }
 
+int s2n_enable_atexit(void)
+{
+    atexit_cleanup = true;
+    return S2N_SUCCESS;
+}
+
 int s2n_init(void)
 {
     /* USAGE-GUIDE says s2n_init MUST NOT be called more than once
@@ -51,6 +57,11 @@ int s2n_init(void)
     POSIX_ENSURE(!initialized, S2N_ERR_INITIALIZED);
 
     main_thread = pthread_self();
+
+    if (getenv("S2N_INTEG_TEST")) {
+        POSIX_GUARD(s2n_in_integ_test_set(true));
+    }
+
     /* Should run before any init method that calls libcrypto methods
      * to ensure we don't try to call methods that don't exist.
      * It doesn't require any locks since it only deals with values that
@@ -60,7 +71,6 @@ int s2n_init(void)
     POSIX_GUARD(s2n_mem_init());
     /* Must run before any init method that calls libcrypto methods. */
     POSIX_GUARD_RESULT(s2n_locking_init());
-    POSIX_GUARD_RESULT(s2n_libcrypto_init());
     POSIX_GUARD(s2n_fips_init());
     POSIX_GUARD_RESULT(s2n_rand_init());
     POSIX_GUARD(s2n_cipher_suites_init());
@@ -69,6 +79,7 @@ int s2n_init(void)
     POSIX_GUARD(s2n_extension_type_init());
     POSIX_GUARD_RESULT(s2n_pq_init());
     POSIX_GUARD_RESULT(s2n_tls13_empty_transcripts_init());
+    POSIX_GUARD_RESULT(s2n_atomic_init());
 
     if (atexit_cleanup) {
         POSIX_ENSURE_OK(atexit(s2n_cleanup_atexit), S2N_ERR_ATEXIT);
@@ -94,7 +105,6 @@ static bool s2n_cleanup_atexit_impl(void)
     bool cleaned_up = s2n_result_is_ok(s2n_cipher_suites_cleanup())
             && s2n_result_is_ok(s2n_rand_cleanup_thread())
             && s2n_result_is_ok(s2n_rand_cleanup())
-            && s2n_result_is_ok(s2n_libcrypto_cleanup())
             && s2n_result_is_ok(s2n_locking_cleanup())
             && (s2n_mem_cleanup() == S2N_SUCCESS);
 
@@ -122,4 +132,9 @@ int s2n_cleanup(void)
 static void s2n_cleanup_atexit(void)
 {
     (void) s2n_cleanup_atexit_impl();
+}
+
+bool s2n_is_initialized(void)
+{
+    return initialized;
 }

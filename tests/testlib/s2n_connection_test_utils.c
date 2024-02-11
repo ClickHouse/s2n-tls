@@ -206,7 +206,7 @@ int s2n_io_pair_shutdown_one_end(struct s2n_test_io_pair *io_pair, int mode_to_c
 
 void s2n_print_connection(struct s2n_connection *conn, const char *marker)
 {
-    int i;
+    size_t i = 0;
 
     printf("marker: %s\n", marker);
     printf("HEADER IN Stuffer (write: %d, read: %d, size: %d)\n", conn->header_in.write_cursor, conn->header_in.read_cursor, conn->header_in.blob.size);
@@ -330,5 +330,14 @@ S2N_RESULT s2n_set_all_mutually_supported_groups(struct s2n_connection *conn)
         conn->kex_params.mutually_supported_kem_groups[i] = kem_pref->tls13_kem_groups[i];
     }
 
+    return S2N_RESULT_OK;
+}
+
+S2N_RESULT s2n_skip_handshake(struct s2n_connection *conn)
+{
+    conn->handshake.handshake_type = NEGOTIATED | FULL_HANDSHAKE;
+    while (!s2n_handshake_is_complete(conn)) {
+        conn->handshake.message_number++;
+    }
     return S2N_RESULT_OK;
 }

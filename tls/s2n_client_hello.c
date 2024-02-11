@@ -20,11 +20,13 @@
 #include <sys/param.h>
 #include <time.h>
 
+#include "api/unstable/fingerprint.h"
 #include "crypto/s2n_fips.h"
 #include "crypto/s2n_hash.h"
 #include "crypto/s2n_rsa_signing.h"
 #include "error/s2n_errno.h"
 #include "stuffer/s2n_stuffer.h"
+#include "tls/extensions/s2n_client_supported_groups.h"
 #include "tls/extensions/s2n_extension_list.h"
 #include "tls/extensions/s2n_server_key_share.h"
 #include "tls/s2n_alerts.h"
@@ -42,7 +44,7 @@
 
 struct s2n_client_hello *s2n_connection_get_client_hello(struct s2n_connection *conn)
 {
-    if (conn->client_hello.callback_invoked != 1) {
+    if (conn->client_hello.parsed != 1) {
         return NULL;
     }
 
@@ -64,21 +66,34 @@ static S2N_RESULT s2n_generate_client_session_id(struct s2n_connection *conn)
         return S2N_RESULT_OK;
     }
 
-    /* Only generate the session id for pre-TLS1.3 if using tickets */
-    if (conn->client_protocol_version < S2N_TLS13 && !conn->config->use_tickets) {
+    /* Only generate the session id if using tickets */
+    bool generate = conn->config->use_tickets;
+
+    /* TLS1.3 doesn't require session ids. The field is actually renamed to legacy_session_id.
+     * However, we still set a session id if dealing with troublesome middleboxes
+     * (middlebox compatibility mode) or if trying to use a TLS1.2 ticket.
+     */
+    if (conn->client_protocol_version >= S2N_TLS13) {
+        generate = s2n_is_middlebox_compat_enabled(conn) || conn->resume_protocol_version;
+    }
+
+    /* Session id not needed - no-op */
+    if (!generate) {
         return S2N_RESULT_OK;
     }
 
-    /* Only generate the session id for TLS1.3 if in middlebox compatibility mode */
-    if (conn->client_protocol_version >= S2N_TLS13 && !s2n_is_middlebox_compat_enabled(conn)) {
-        return S2N_RESULT_OK;
-    }
+    /* QUIC should not allow session ids for any reason.
+     *
+     *= https://tools.ietf.org/rfc/rfc9001#section-8.4
+     *# A server SHOULD treat the receipt of a TLS ClientHello with a non-empty
+     *# legacy_session_id field as a connection error of type PROTOCOL_VIOLATION.
+     */
+    RESULT_ENSURE(!conn->quic_enabled, S2N_ERR_UNSUPPORTED_WITH_QUIC);
 
     struct s2n_blob session_id = { 0 };
     RESULT_GUARD_POSIX(s2n_blob_init(&session_id, conn->session_id, S2N_TLS_SESSION_ID_MAX_LEN));
     RESULT_GUARD(s2n_get_public_random_data(&session_id));
     conn->session_id_len = S2N_TLS_SESSION_ID_MAX_LEN;
-
     return S2N_RESULT_OK;
 }
 
@@ -153,7 +168,7 @@ ssize_t s2n_client_hello_get_extensions(struct s2n_client_hello *ch, uint8_t *ou
     return len;
 }
 
-int s2n_client_hello_free(struct s2n_client_hello *client_hello)
+int s2n_client_hello_free_raw_message(struct s2n_client_hello *client_hello)
 {
     POSIX_ENSURE_REF(client_hello);
 
@@ -167,15 +182,27 @@ int s2n_client_hello_free(struct s2n_client_hello *client_hello)
     return 0;
 }
 
-int s2n_collect_client_hello(struct s2n_connection *conn, struct s2n_stuffer *source)
+int s2n_client_hello_free(struct s2n_client_hello **ch)
 {
-    POSIX_ENSURE_REF(conn);
+    POSIX_ENSURE_REF(ch);
+    if (*ch == NULL) {
+        return S2N_SUCCESS;
+    }
+
+    POSIX_ENSURE((*ch)->alloced, S2N_ERR_INVALID_ARGUMENT);
+    POSIX_GUARD(s2n_client_hello_free_raw_message(*ch));
+    POSIX_GUARD(s2n_free_object((uint8_t **) ch, sizeof(struct s2n_client_hello)));
+    *ch = NULL;
+    return S2N_SUCCESS;
+}
+
+int s2n_collect_client_hello(struct s2n_client_hello *ch, struct s2n_stuffer *source)
+{
+    POSIX_ENSURE_REF(ch);
     POSIX_ENSURE_REF(source);
 
     uint32_t size = s2n_stuffer_data_available(source);
     S2N_ERROR_IF(size == 0, S2N_ERR_BAD_MESSAGE);
-
-    struct s2n_client_hello *ch = &conn->client_hello;
 
     POSIX_GUARD(s2n_realloc(&ch->raw_message, size));
     POSIX_GUARD(s2n_stuffer_read(source, &ch->raw_message));
@@ -218,16 +245,26 @@ static S2N_RESULT s2n_client_hello_verify_for_retry(struct s2n_connection *conn,
                           verify_len),
             S2N_ERR_BAD_MESSAGE);
 
-    /*
-     * We need to verify the client random separately
-     * because we erase it from the client hello during parsing.
-     * Compare the old value to the current value.
+    /* In the past, the s2n-tls client updated the client hello in ways not
+     * allowed by RFC8446: https://github.com/aws/s2n-tls/pull/3311
+     * Although the issue was addressed, its existence means that old versions
+     * of the s2n-tls client will fail this validation.
+     *
+     * So to avoid breaking old s2n-tls clients, we do not enforce this validation
+     * outside of tests. We continue to enforce it during tests to avoid regressions.
      */
-    RESULT_ENSURE(s2n_constant_time_equals(
-                          previous_client_random,
-                          conn->handshake_params.client_random,
-                          S2N_TLS_RANDOM_DATA_LEN),
-            S2N_ERR_BAD_MESSAGE);
+    if (s2n_in_test()) {
+        /*
+         * We need to verify the client random separately
+         * because we erase it from the client hello during parsing.
+         * Compare the old value to the current value.
+         */
+        RESULT_ENSURE(s2n_constant_time_equals(
+                              previous_client_random,
+                              conn->handshake_params.client_random,
+                              S2N_TLS_RANDOM_DATA_LEN),
+                S2N_ERR_BAD_MESSAGE);
+    }
 
     /*
      * Now enforce that the extensions also exactly match,
@@ -304,6 +341,69 @@ static S2N_RESULT s2n_client_hello_verify_for_retry(struct s2n_connection *conn,
     return S2N_RESULT_OK;
 }
 
+S2N_RESULT s2n_client_hello_parse_raw(struct s2n_client_hello *client_hello,
+        uint8_t client_protocol_version[S2N_TLS_PROTOCOL_VERSION_LEN],
+        uint8_t client_random[S2N_TLS_RANDOM_DATA_LEN])
+{
+    RESULT_ENSURE_REF(client_hello);
+
+    struct s2n_stuffer in_stuffer = { 0 };
+    RESULT_GUARD_POSIX(s2n_stuffer_init_written(&in_stuffer, &client_hello->raw_message));
+    struct s2n_stuffer *in = &in_stuffer;
+
+    /**
+     * https://tools.ietf.org/rfc/rfc8446#4.1.2
+     * Structure of this message:
+     *
+     *    uint16 ProtocolVersion;
+     *    opaque Random[32];
+     *
+     *    uint8 CipherSuite[2];
+     *
+     *    struct {
+     *        ProtocolVersion legacy_version = 0x0303;
+     *        Random random;
+     *        opaque legacy_session_id<0..32>;
+     *        CipherSuite cipher_suites<2..2^16-2>;
+     *        opaque legacy_compression_methods<1..2^8-1>;
+     *        Extension extensions<8..2^16-1>;
+     *    } ClientHello;
+     **/
+
+    /* legacy_version */
+    RESULT_GUARD_POSIX(s2n_stuffer_read_bytes(in, client_protocol_version, S2N_TLS_PROTOCOL_VERSION_LEN));
+
+    /* random */
+    RESULT_GUARD_POSIX(s2n_stuffer_erase_and_read_bytes(in, client_random, S2N_TLS_RANDOM_DATA_LEN));
+
+    /* legacy_session_id */
+    uint8_t session_id_len = 0;
+    RESULT_GUARD_POSIX(s2n_stuffer_read_uint8(in, &session_id_len));
+    RESULT_ENSURE(session_id_len <= S2N_TLS_SESSION_ID_MAX_LEN, S2N_ERR_BAD_MESSAGE);
+    uint8_t *session_id = s2n_stuffer_raw_read(in, session_id_len);
+    RESULT_ENSURE(session_id != NULL, S2N_ERR_BAD_MESSAGE);
+    RESULT_GUARD_POSIX(s2n_blob_init(&client_hello->session_id, session_id, session_id_len));
+
+    /* cipher suites */
+    uint16_t cipher_suites_length = 0;
+    RESULT_GUARD_POSIX(s2n_stuffer_read_uint16(in, &cipher_suites_length));
+    RESULT_ENSURE(cipher_suites_length > 0, S2N_ERR_BAD_MESSAGE);
+    RESULT_ENSURE(cipher_suites_length % S2N_TLS_CIPHER_SUITE_LEN == 0, S2N_ERR_BAD_MESSAGE);
+    uint8_t *cipher_suites = s2n_stuffer_raw_read(in, cipher_suites_length);
+    RESULT_ENSURE(cipher_suites != NULL, S2N_ERR_BAD_MESSAGE);
+    RESULT_GUARD_POSIX(s2n_blob_init(&client_hello->cipher_suites, cipher_suites, cipher_suites_length));
+
+    /* legacy_compression_methods (ignored) */
+    uint8_t num_compression_methods = 0;
+    RESULT_GUARD_POSIX(s2n_stuffer_read_uint8(in, &num_compression_methods));
+    RESULT_GUARD_POSIX(s2n_stuffer_skip_read(in, num_compression_methods));
+
+    /* extensions */
+    RESULT_GUARD_POSIX(s2n_extension_list_parse(in, &client_hello->extensions));
+
+    return S2N_RESULT_OK;
+}
+
 int s2n_parse_client_hello(struct s2n_connection *conn)
 {
     POSIX_ENSURE_REF(conn);
@@ -312,12 +412,12 @@ int s2n_parse_client_hello(struct s2n_connection *conn)
      * somewhere safe so we can compare it to the new client hello later.
      */
     DEFER_CLEANUP(struct s2n_client_hello previous_hello_retry = conn->client_hello,
-            s2n_client_hello_free);
+            s2n_client_hello_free_raw_message);
     if (s2n_is_hello_retry_handshake(conn)) {
         POSIX_CHECKED_MEMSET(&conn->client_hello, 0, sizeof(struct s2n_client_hello));
     }
 
-    POSIX_GUARD(s2n_collect_client_hello(conn, &conn->handshake.io));
+    POSIX_GUARD(s2n_collect_client_hello(&conn->client_hello, &conn->handshake.io));
 
     /* The ClientHello version must be TLS12 after a HelloRetryRequest */
     if (s2n_is_hello_retry_handshake(conn)) {
@@ -329,20 +429,15 @@ int s2n_parse_client_hello(struct s2n_connection *conn)
         return S2N_SUCCESS;
     }
 
-    /* Going forward, we parse the collected client hello */
-    struct s2n_client_hello *client_hello = &conn->client_hello;
-    struct s2n_stuffer in_stuffer = { 0 };
-    POSIX_GUARD(s2n_stuffer_init(&in_stuffer, &client_hello->raw_message));
-    POSIX_GUARD(s2n_stuffer_skip_write(&in_stuffer, client_hello->raw_message.size));
-    struct s2n_stuffer *in = &in_stuffer;
-
-    uint8_t client_protocol_version[S2N_TLS_PROTOCOL_VERSION_LEN];
-
-    POSIX_GUARD(s2n_stuffer_read_bytes(in, client_protocol_version, S2N_TLS_PROTOCOL_VERSION_LEN));
-
+    /* Save the current client_random for comparison in the case of a retry */
     uint8_t previous_client_random[S2N_TLS_RANDOM_DATA_LEN] = { 0 };
-    POSIX_CHECKED_MEMCPY(previous_client_random, conn->handshake_params.client_random, S2N_TLS_RANDOM_DATA_LEN);
-    POSIX_GUARD(s2n_stuffer_erase_and_read_bytes(in, conn->handshake_params.client_random, S2N_TLS_RANDOM_DATA_LEN));
+    POSIX_CHECKED_MEMCPY(previous_client_random, conn->handshake_params.client_random,
+            S2N_TLS_RANDOM_DATA_LEN);
+
+    /* Parse raw, collected client hello */
+    uint8_t client_protocol_version[S2N_TLS_PROTOCOL_VERSION_LEN] = { 0 };
+    POSIX_GUARD_RESULT(s2n_client_hello_parse_raw(&conn->client_hello,
+            client_protocol_version, conn->handshake_params.client_random));
 
     /* Protocol version in the ClientHello is fixed at 0x0303(TLS 1.2) for
      * future versions of TLS. Therefore, we will negotiate down if a client sends
@@ -351,46 +446,84 @@ int s2n_parse_client_hello(struct s2n_connection *conn)
     conn->client_protocol_version = MIN((client_protocol_version[0] * 10) + client_protocol_version[1], S2N_TLS12);
     conn->client_hello_version = conn->client_protocol_version;
 
-    POSIX_GUARD(s2n_stuffer_read_uint8(in, &conn->session_id_len));
-    S2N_ERROR_IF(conn->session_id_len > S2N_TLS_SESSION_ID_MAX_LEN || conn->session_id_len > s2n_stuffer_data_available(in), S2N_ERR_BAD_MESSAGE);
-    POSIX_GUARD(s2n_blob_init(&client_hello->session_id, s2n_stuffer_raw_read(in, conn->session_id_len), conn->session_id_len));
-    POSIX_CHECKED_MEMCPY(conn->session_id, client_hello->session_id.data, conn->session_id_len);
+    /* Copy the session id to the connection. */
+    conn->session_id_len = conn->client_hello.session_id.size;
+    POSIX_CHECKED_MEMCPY(conn->session_id, conn->client_hello.session_id.data, conn->session_id_len);
 
-    uint16_t cipher_suites_length = 0;
-    POSIX_GUARD(s2n_stuffer_read_uint16(in, &cipher_suites_length));
-    POSIX_ENSURE(cipher_suites_length > 0, S2N_ERR_BAD_MESSAGE);
-    POSIX_ENSURE(cipher_suites_length % S2N_TLS_CIPHER_SUITE_LEN == 0, S2N_ERR_BAD_MESSAGE);
-
-    client_hello->cipher_suites.size = cipher_suites_length;
-    client_hello->cipher_suites.data = s2n_stuffer_raw_read(in, cipher_suites_length);
-    POSIX_ENSURE_REF(client_hello->cipher_suites.data);
-
-    /* Don't choose the cipher yet, read the extensions first */
-    uint8_t num_compression_methods = 0;
-    POSIX_GUARD(s2n_stuffer_read_uint8(in, &num_compression_methods));
-    POSIX_GUARD(s2n_stuffer_skip_read(in, num_compression_methods));
-
+    /* Set default key exchange curve.
+     * This is going to be our fallback if the client has no preference.
+     *
+     * P-256 is our preferred fallback option because the TLS1.3 RFC requires
+     * all implementations to support it:
+     *
+     *     https://tools.ietf.org/rfc/rfc8446#section-9.1
+     *     A TLS-compliant application MUST support key exchange with secp256r1 (NIST P-256)
+     *     and SHOULD support key exchange with X25519 [RFC7748]
+     *
+     *= https://tools.ietf.org/rfc/rfc4492#section-4
+     *# A client that proposes ECC cipher suites may choose not to include these extensions.
+     *# In this case, the server is free to choose any one of the elliptic curves or point formats listed in Section 5.
+     *
+     */
     const struct s2n_ecc_preferences *ecc_pref = NULL;
     POSIX_GUARD(s2n_connection_get_ecc_preferences(conn, &ecc_pref));
     POSIX_ENSURE_REF(ecc_pref);
     POSIX_ENSURE_GT(ecc_pref->count, 0);
-
     if (s2n_ecc_preferences_includes_curve(ecc_pref, TLS_EC_CURVE_SECP_256_R1)) {
-        /* This is going to be our fallback if the client has no preference. */
-        /* A TLS-compliant application MUST support key exchange with secp256r1 (NIST P-256) */
-        /* and SHOULD support key exchange with X25519 [RFC7748]. */
-        /* - https://tools.ietf.org/html/rfc8446#section-9.1 */
         conn->kex_params.server_ecc_evp_params.negotiated_curve = &s2n_ecc_curve_secp256r1;
     } else {
-        /* P-256 is the preferred fallback option. These prefs don't support it, so choose whatever curve is first. */
+        /* If P-256 isn't allowed by the current security policy, instead choose
+         * the first / most preferred curve.
+         */
         conn->kex_params.server_ecc_evp_params.negotiated_curve = ecc_pref->ecc_curves[0];
     }
 
-    POSIX_GUARD(s2n_extension_list_parse(in, &conn->client_hello.extensions));
-
     POSIX_GUARD_RESULT(s2n_client_hello_verify_for_retry(conn,
-            &previous_hello_retry, client_hello, previous_client_random));
+            &previous_hello_retry, &conn->client_hello, previous_client_random));
     return S2N_SUCCESS;
+}
+
+static S2N_RESULT s2n_client_hello_parse_message_impl(struct s2n_client_hello **result,
+        const uint8_t *raw_message, uint32_t raw_message_size)
+{
+    RESULT_ENSURE_REF(result);
+
+    DEFER_CLEANUP(struct s2n_blob mem = { 0 }, s2n_free);
+    RESULT_GUARD_POSIX(s2n_alloc(&mem, sizeof(struct s2n_client_hello)));
+    RESULT_GUARD_POSIX(s2n_blob_zero(&mem));
+
+    DEFER_CLEANUP(struct s2n_client_hello *client_hello = NULL, s2n_client_hello_free);
+    client_hello = (struct s2n_client_hello *) (void *) mem.data;
+    client_hello->alloced = true;
+    ZERO_TO_DISABLE_DEFER_CLEANUP(mem);
+
+    DEFER_CLEANUP(struct s2n_stuffer in = { 0 }, s2n_stuffer_free);
+    RESULT_GUARD_POSIX(s2n_stuffer_alloc(&in, raw_message_size));
+    RESULT_GUARD_POSIX(s2n_stuffer_write_bytes(&in, raw_message, raw_message_size));
+
+    uint8_t message_type = 0;
+    uint32_t message_len = 0;
+    RESULT_GUARD(s2n_handshake_parse_header(&in, &message_type, &message_len));
+    RESULT_ENSURE(message_type == TLS_CLIENT_HELLO, S2N_ERR_BAD_MESSAGE);
+    RESULT_ENSURE(message_len == s2n_stuffer_data_available(&in), S2N_ERR_BAD_MESSAGE);
+
+    RESULT_GUARD_POSIX(s2n_collect_client_hello(client_hello, &in));
+    RESULT_ENSURE(s2n_stuffer_data_available(&in) == 0, S2N_ERR_BAD_MESSAGE);
+
+    uint8_t protocol_version[S2N_TLS_PROTOCOL_VERSION_LEN] = { 0 };
+    uint8_t random[S2N_TLS_RANDOM_DATA_LEN] = { 0 };
+    RESULT_GUARD(s2n_client_hello_parse_raw(client_hello, protocol_version, random));
+
+    *result = client_hello;
+    ZERO_TO_DISABLE_DEFER_CLEANUP(client_hello);
+    return S2N_RESULT_OK;
+}
+
+struct s2n_client_hello *s2n_client_hello_parse_message(const uint8_t *raw_message, uint32_t raw_message_size)
+{
+    struct s2n_client_hello *result = NULL;
+    PTR_GUARD_RESULT(s2n_client_hello_parse_message_impl(&result, raw_message, raw_message_size));
+    return result;
 }
 
 int s2n_process_client_hello(struct s2n_connection *conn)
@@ -465,7 +598,7 @@ int s2n_process_client_hello(struct s2n_connection *conn)
     /* And set the signature and hash algorithm used for key exchange signatures */
     POSIX_GUARD(s2n_choose_sig_scheme_from_peer_preference_list(conn,
             &conn->handshake_params.client_sig_hash_algs,
-            &conn->handshake_params.conn_sig_scheme));
+            &conn->handshake_params.server_cert_sig_scheme));
 
     /* And finally, set the certs specified by the final auth + sig_alg combo. */
     POSIX_GUARD(s2n_select_certs_for_server_auth(conn, &conn->handshake_params.our_chain_and_key));
@@ -499,31 +632,25 @@ fail:
     RESULT_BAIL(S2N_ERR_CANCELLED);
 }
 
-bool s2n_client_hello_invoke_callback(struct s2n_connection *conn)
-{
-    /* Invoke only if the callback has not been called or if polling mode is enabled */
-    bool invoke = !conn->client_hello.callback_invoked || conn->config->client_hello_cb_enable_poll;
-    /*
-     * The callback should not be called if this client_hello is in response to a hello retry.
-     */
-    return invoke && !IS_HELLO_RETRY_HANDSHAKE(conn);
-}
-
 int s2n_client_hello_recv(struct s2n_connection *conn)
 {
-    if (conn->config->client_hello_cb_enable_poll == 0) {
-        POSIX_ENSURE(conn->client_hello.callback_async_blocked == 0, S2N_ERR_ASYNC_BLOCKED);
+    POSIX_ENSURE(!conn->client_hello.callback_async_blocked, S2N_ERR_ASYNC_BLOCKED);
+
+    /* Only parse the ClientHello once */
+    if (!conn->client_hello.parsed) {
+        POSIX_GUARD(s2n_parse_client_hello(conn));
+        /* Mark the collected client hello as available when parsing is done and before the client hello callback */
+        conn->client_hello.parsed = true;
     }
 
-    if (conn->client_hello.parsed == 0) {
-        /* Parse client hello */
-        POSIX_GUARD(s2n_parse_client_hello(conn));
-        conn->client_hello.parsed = 1;
-    }
-    /* Call the client_hello_cb once unless polling is enabled. */
-    if (s2n_client_hello_invoke_callback(conn)) {
-        /* Mark the collected client hello as available when parsing is done and before the client hello callback */
-        conn->client_hello.callback_invoked = 1;
+    /* Only invoke the ClientHello callback once.
+     * This means that we do NOT invoke the callback again on the second ClientHello
+     * in a TLS1.3 retry handshake. We explicitly check for a retry because the
+     * callback state may have been cleared while parsing the second ClientHello.
+     */
+    if (!conn->client_hello.callback_invoked && !IS_HELLO_RETRY_HANDSHAKE(conn)) {
+        /* Mark the client hello callback as invoked to avoid calling it again. */
+        conn->client_hello.callback_invoked = true;
 
         /* Call client_hello_cb if exists, letting application to modify s2n_connection or swap s2n_config */
         if (conn->config->client_hello_cb) {
@@ -652,10 +779,24 @@ int s2n_client_hello_send(struct s2n_connection *conn)
     return S2N_SUCCESS;
 }
 
-/* See http://www-archive.mozilla.org/projects/security/pki/nss/ssl/draft02.html 2.5 */
+/*
+ * s2n-tls does NOT support SSLv2. However, it does support SSLv2 ClientHellos.
+ * Clients may send SSLv2 ClientHellos advertising higher protocol versions for
+ * backwards compatibility reasons. See https://tools.ietf.org/rfc/rfc2246 Appendix E.
+ *
+ * In this case, conn->client_hello_version will be SSLv2, but conn->client_protocol_version
+ * will likely be higher.
+ *
+ * See http://www-archive.mozilla.org/projects/security/pki/nss/ssl/draft02.html Section 2.5
+ * for a description of the expected SSLv2 format.
+ * Alternatively, the TLS1.0 RFC includes a more modern description of the format:
+ * https://tools.ietf.org/rfc/rfc2246 Appendix E.1
+ */
 int s2n_sslv2_client_hello_recv(struct s2n_connection *conn)
 {
     struct s2n_client_hello *client_hello = &conn->client_hello;
+    client_hello->sslv2 = true;
+
     struct s2n_stuffer in_stuffer = { 0 };
     POSIX_GUARD(s2n_stuffer_init(&in_stuffer, &client_hello->raw_message));
     POSIX_GUARD(s2n_stuffer_skip_write(&in_stuffer, client_hello->raw_message.size));
@@ -692,7 +833,7 @@ int s2n_sslv2_client_hello_recv(struct s2n_connection *conn)
     POSIX_GUARD(s2n_conn_find_name_matching_certs(conn));
 
     POSIX_GUARD(s2n_set_cipher_as_sslv2_server(conn, client_hello->cipher_suites.data, client_hello->cipher_suites.size / S2N_SSLv2_CIPHER_SUITE_LEN));
-    POSIX_GUARD(s2n_choose_default_sig_scheme(conn, &conn->handshake_params.conn_sig_scheme, S2N_SERVER));
+    POSIX_GUARD(s2n_choose_default_sig_scheme(conn, &conn->handshake_params.server_cert_sig_scheme, S2N_SERVER));
     POSIX_GUARD(s2n_select_certs_for_server_auth(conn, &conn->handshake_params.our_chain_and_key));
 
     S2N_ERROR_IF(session_id_length > s2n_stuffer_data_available(in), S2N_ERR_BAD_MESSAGE);
@@ -713,7 +854,7 @@ int s2n_sslv2_client_hello_recv(struct s2n_connection *conn)
     return 0;
 }
 
-static int s2n_client_hello_get_parsed_extension(s2n_tls_extension_type extension_type,
+int s2n_client_hello_get_parsed_extension(s2n_tls_extension_type extension_type,
         s2n_parsed_extensions_list *parsed_extension_list, s2n_parsed_extension **parsed_extension)
 {
     POSIX_ENSURE_REF(parsed_extension_list);
@@ -723,7 +864,7 @@ static int s2n_client_hello_get_parsed_extension(s2n_tls_extension_type extensio
     POSIX_GUARD(s2n_extension_supported_iana_value_to_id(extension_type, &extension_type_id));
 
     s2n_parsed_extension *found_parsed_extension = &parsed_extension_list->parsed_extensions[extension_type_id];
-    POSIX_ENSURE_REF(found_parsed_extension->extension.data);
+    POSIX_ENSURE(found_parsed_extension->extension.data, S2N_ERR_EXTENSION_NOT_RECEIVED);
     POSIX_ENSURE(found_parsed_extension->extension_type == extension_type, S2N_ERR_INVALID_PARSED_EXTENSIONS);
 
     *parsed_extension = found_parsed_extension;
@@ -829,5 +970,36 @@ int s2n_client_hello_has_extension(struct s2n_client_hello *ch, uint16_t extensi
     if (extension.data != NULL) {
         *exists = true;
     }
+    return S2N_SUCCESS;
+}
+
+int s2n_client_hello_get_supported_groups(struct s2n_client_hello *ch, uint16_t *groups,
+        uint16_t groups_count_max, uint16_t *groups_count_out)
+{
+    POSIX_ENSURE_REF(groups_count_out);
+    *groups_count_out = 0;
+    POSIX_ENSURE_REF(ch);
+    POSIX_ENSURE_REF(groups);
+
+    s2n_parsed_extension *supported_groups_extension = NULL;
+    POSIX_GUARD(s2n_client_hello_get_parsed_extension(S2N_EXTENSION_SUPPORTED_GROUPS, &ch->extensions, &supported_groups_extension));
+    POSIX_ENSURE_REF(supported_groups_extension);
+
+    struct s2n_stuffer extension_stuffer = { 0 };
+    POSIX_GUARD(s2n_stuffer_init_written(&extension_stuffer, &supported_groups_extension->extension));
+
+    uint16_t supported_groups_count = 0;
+    POSIX_GUARD_RESULT(s2n_supported_groups_parse_count(&extension_stuffer, &supported_groups_count));
+    POSIX_ENSURE(supported_groups_count <= groups_count_max, S2N_ERR_INSUFFICIENT_MEM_SIZE);
+
+    for (size_t i = 0; i < supported_groups_count; i++) {
+        /* s2n_stuffer_read_uint16 is used to read each of the supported groups in network-order
+         * endianness.
+         */
+        POSIX_GUARD(s2n_stuffer_read_uint16(&extension_stuffer, &groups[i]));
+    }
+
+    *groups_count_out = supported_groups_count;
+
     return S2N_SUCCESS;
 }

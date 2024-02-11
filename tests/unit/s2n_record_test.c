@@ -70,10 +70,12 @@ int main(int argc, char **argv)
 {
     struct s2n_connection *conn;
     uint8_t mac_key[] = "sample mac key";
-    struct s2n_blob fixed_iv = { .data = mac_key, .size = sizeof(mac_key) };
+    struct s2n_blob fixed_iv = { 0 };
+    EXPECT_SUCCESS(s2n_blob_init(&fixed_iv, mac_key, sizeof(mac_key)));
     struct s2n_hmac_state check_mac;
     uint8_t random_data[S2N_DEFAULT_FRAGMENT_LENGTH + 1];
-    struct s2n_blob r = { .data = random_data, .size = sizeof(random_data) };
+    struct s2n_blob r = { 0 };
+    EXPECT_SUCCESS(s2n_blob_init(&r, random_data, sizeof(random_data)));
 
     BEGIN_TEST();
     EXPECT_SUCCESS(s2n_disable_tls13_in_test());
@@ -92,8 +94,9 @@ int main(int argc, char **argv)
     conn->initial->cipher_suite = &s2n_null_cipher_suite;
     conn->actual_protocol_version = S2N_TLS11;
 
-    for (int i = 0; i <= S2N_DEFAULT_FRAGMENT_LENGTH + 1; i++) {
-        struct s2n_blob in = { .data = random_data, .size = i };
+    for (size_t i = 0; i <= S2N_DEFAULT_FRAGMENT_LENGTH + 1; i++) {
+        struct s2n_blob in = { 0 };
+        EXPECT_SUCCESS(s2n_blob_init(&in, random_data, i));
         int bytes_written;
 
         EXPECT_SUCCESS(s2n_stuffer_wipe(&conn->out));
@@ -135,8 +138,9 @@ int main(int argc, char **argv)
     conn->initial->cipher_suite = &s2n_null_cipher_suite;
     conn->actual_protocol_version = S2N_TLS11;
 
-    for (int i = 0; i <= S2N_DEFAULT_FRAGMENT_LENGTH + 1; i++) {
-        struct s2n_blob in = { .data = random_data, .size = i };
+    for (size_t i = 0; i <= S2N_DEFAULT_FRAGMENT_LENGTH + 1; i++) {
+        struct s2n_blob in = { 0 };
+        EXPECT_SUCCESS(s2n_blob_init(&in, random_data, i));
         int bytes_written;
 
         EXPECT_SUCCESS(s2n_hmac_reset(&check_mac));
@@ -218,8 +222,9 @@ int main(int argc, char **argv)
     conn->actual_protocol_version = S2N_TLS10;
     conn->initial->cipher_suite = &mock_block_cipher_suite;
 
-    for (int i = 0; i <= S2N_DEFAULT_FRAGMENT_LENGTH + 1; i++) {
-        struct s2n_blob in = { .data = random_data, .size = i };
+    for (size_t i = 0; i <= S2N_DEFAULT_FRAGMENT_LENGTH + 1; i++) {
+        struct s2n_blob in = { 0 };
+        EXPECT_SUCCESS(s2n_blob_init(&in, random_data, i));
         int bytes_written;
 
         EXPECT_SUCCESS(s2n_hmac_reset(&check_mac));
@@ -249,10 +254,11 @@ int main(int argc, char **argv)
 
         /* The last byte of out should indicate how much padding there was */
         uint8_t p = conn->out.blob.data[conn->out.write_cursor - 1];
-        EXPECT_EQUAL(5 + bytes_written + 20 + p + 1, s2n_stuffer_data_available(&conn->out));
+        const uint32_t remaining = 5 + bytes_written + 20 + p + 1;
+        EXPECT_EQUAL(remaining, s2n_stuffer_data_available(&conn->out));
 
         /* Check that the last 'p' bytes are all set to 'p' */
-        for (int j = 0; j <= p; j++) {
+        for (size_t j = 0; j <= (size_t) p; j++) {
             EXPECT_EQUAL(conn->out.blob.data[5 + bytes_written + 20 + j], p);
         }
 
@@ -287,7 +293,8 @@ int main(int argc, char **argv)
     conn->initial->cipher_suite = &mock_block_cipher_suite;
 
     for (int i = 0; i <= S2N_DEFAULT_FRAGMENT_LENGTH + 1; i++) {
-        struct s2n_blob in = { .data = random_data, .size = i };
+        struct s2n_blob in = { 0 };
+        EXPECT_SUCCESS(s2n_blob_init(&in, random_data, i));
         int bytes_written;
 
         EXPECT_SUCCESS(s2n_hmac_reset(&check_mac));
@@ -320,7 +327,7 @@ int main(int argc, char **argv)
         EXPECT_EQUAL(5 + bytes_written + 20 + 16 + p + 1, s2n_stuffer_data_available(&conn->out));
 
         /* Check that the last 'p' bytes are all set to 'p' */
-        for (int j = 0; j <= p; j++) {
+        for (size_t j = 0; j <= (size_t) p; j++) {
             EXPECT_EQUAL(conn->out.blob.data[5 + bytes_written + 16 + 20 + j], p);
         }
 
@@ -348,7 +355,8 @@ int main(int argc, char **argv)
     }
 
     /* Test TLS record limit */
-    struct s2n_blob empty_blob = { .data = NULL, .size = 0 };
+    struct s2n_blob empty_blob = { 0 };
+    EXPECT_SUCCESS(s2n_blob_init(&empty_blob, NULL, 0));
     conn->initial->cipher_suite = &s2n_null_cipher_suite;
 
     /* Fast forward the sequence number */

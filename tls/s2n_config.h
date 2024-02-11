@@ -66,6 +66,7 @@ struct s2n_config {
     /* if this is FALSE, server will ignore client's Maximum Fragment Length request */
     unsigned accept_mfl : 1;
     unsigned check_ocsp : 1;
+    unsigned disable_x509_time_validation : 1;
     unsigned disable_x509_validation : 1;
     unsigned max_verify_cert_chain_depth_set : 1;
     /* Whether to add dss cert type during a server certificate request.
@@ -79,12 +80,6 @@ struct s2n_config {
      * but async signing must be enabled. Use this flag to enforce that restriction.
      */
     unsigned no_signing_key : 1;
-    /*
-     * This option exists to allow for polling the client_hello callback.
-     *
-     * Note: This defaults to false to ensure backwards compatibility.
-     */
-    unsigned client_hello_cb_enable_poll : 1;
     /*
      * Whether to verify signatures locally before sending them over the wire.
      * See s2n_config_set_verify_after_sign.
@@ -101,6 +96,12 @@ struct s2n_config {
      */
     unsigned recv_multi_record : 1;
 
+    /* Indicates whether the user has enabled OCSP status requests */
+    unsigned ocsp_status_requested_by_user : 1;
+
+    /* Indicates whether s2n has enabled OCSP status requests, for backwards compatibility */
+    unsigned ocsp_status_requested_by_s2n : 1;
+
     struct s2n_dh_params *dhparams;
     /* Needed until we can deprecate s2n_config_add_cert_chain_and_key. This is
      * used to release memory allocated only in the deprecated API that the application 
@@ -108,7 +109,6 @@ struct s2n_config {
     struct s2n_map *domain_name_to_cert_map;
     struct certs_by_type default_certs_by_type;
     struct s2n_blob application_protocols;
-    s2n_status_request_type status_request_type;
     s2n_clock_time_nanoseconds wall_clock;
     s2n_clock_time_nanoseconds monotonic_clock;
 
@@ -147,11 +147,14 @@ struct s2n_config {
 
     /* Return TRUE if the host should be trusted, If FALSE this will likely be called again for every host/alternative name
      * in the certificate. If any respond TRUE. If none return TRUE, the cert will be considered untrusted. */
-    uint8_t (*verify_host)(const char *host_name, size_t host_name_len, void *data);
+    s2n_verify_host_fn verify_host_fn;
     void *data_for_verify_host;
 
     s2n_crl_lookup_callback crl_lookup_cb;
     void *crl_lookup_ctx;
+
+    s2n_cert_validation_callback cert_validation_cb;
+    void *cert_validation_ctx;
 
     /* Application supplied callback to resolve domain name conflicts when loading certs. */
     s2n_cert_tiebreak_callback cert_tiebreak_cb;

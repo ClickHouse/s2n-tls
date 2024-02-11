@@ -76,6 +76,14 @@ int s2n_stuffer_init(struct s2n_stuffer *stuffer, struct s2n_blob *in)
     return S2N_SUCCESS;
 }
 
+int s2n_stuffer_init_written(struct s2n_stuffer *stuffer, struct s2n_blob *in)
+{
+    POSIX_ENSURE_REF(in);
+    POSIX_GUARD(s2n_stuffer_init(stuffer, in));
+    POSIX_GUARD(s2n_stuffer_skip_write(stuffer, in->size));
+    return S2N_SUCCESS;
+}
+
 int s2n_stuffer_alloc(struct s2n_stuffer *stuffer, const uint32_t size)
 {
     POSIX_ENSURE_REF(stuffer);
@@ -352,11 +360,11 @@ int s2n_stuffer_writev_bytes(struct s2n_stuffer *stuffer, const struct iovec *io
             continue;
         }
         size_t iov_len_op = iov[i].iov_len - to_skip;
-        POSIX_ENSURE(iov_len_op <= UINT32_MAX, S2N_FAILURE);
+        POSIX_ENSURE_LTE(iov_len_op, UINT32_MAX);
         uint32_t iov_len = (uint32_t) iov_len_op;
         uint32_t iov_size_to_take = MIN(size_left, iov_len);
         POSIX_ENSURE_REF(iov[i].iov_base);
-        POSIX_ENSURE(to_skip < iov[i].iov_len, S2N_FAILURE);
+        POSIX_ENSURE_LT(to_skip, iov[i].iov_len);
         POSIX_CHECKED_MEMCPY(ptr, ((uint8_t *) (iov[i].iov_base)) + to_skip, iov_size_to_take);
         size_left -= iov_size_to_take;
         if (size_left == 0) {

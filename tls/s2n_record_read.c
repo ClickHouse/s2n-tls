@@ -40,13 +40,39 @@ int s2n_sslv2_record_header_parse(
 
     POSIX_GUARD(s2n_stuffer_read_uint16(in, fragment_length));
 
-    /* Adjust to account for the 3 bytes of payload data we consumed in the header */
+    /* The SSLv2 header is only a 2 byte record length (technically 3 bytes if
+     * padding is included, but s2n-tls assumes no padding).
+     * See https://www.ietf.org/archive/id/draft-hickman-netscape-ssl-00.txt.
+     *
+     * So by reading 5 bytes for a standard header we have also read the first
+     * 3 bytes of the record payload. s2n-tls only supports SSLv2 ClientHellos,
+     * so we assume that those 3 bytes are the first two fields of the
+     * SSLv2 ClientHello.
+     */
+
+    /* Because we already read 3 bytes of the record payload while trying to
+     * read a standard header, we need to adjust the length so that we only
+     * try to read the remainder of the record payload.
+     */
     POSIX_ENSURE_GTE(*fragment_length, 3);
     *fragment_length -= 3;
 
+    /*
+     * The first field of an SSLv2 ClientHello is the msg_type.
+     *
+     * This is always '1', matching the ClientHello msg_type used by later
+     * handshake messages.
+     */
     POSIX_GUARD(s2n_stuffer_read_uint8(in, record_type));
 
-    uint8_t protocol_version[S2N_TLS_PROTOCOL_VERSION_LEN];
+    /*
+     * The second field of an SSLv2 ClientHello is the version.
+     *
+     * The protocol version read here will likely not be SSLv2, since we only
+     * accept SSLv2 ClientHellos offering higher protocol versions.
+     * See s2n_sslv2_client_hello_recv.
+     */
+    uint8_t protocol_version[S2N_TLS_PROTOCOL_VERSION_LEN] = { 0 };
     POSIX_GUARD(s2n_stuffer_read_bytes(in, protocol_version, S2N_TLS_PROTOCOL_VERSION_LEN));
 
     *client_protocol_version = (protocol_version[0] * 10) + protocol_version[1];
@@ -80,12 +106,19 @@ int s2n_record_header_parse(
     S2N_ERROR_IF(conn->actual_protocol_version_established && MIN(conn->actual_protocol_version, S2N_TLS12) /* check against legacy record version (1.2) in tls 1.3 */
                             != version,
             S2N_ERR_BAD_MESSAGE);
-    POSIX_GUARD(s2n_stuffer_read_uint16(in, fragment_length));
 
-    /* Some servers send fragments that are above the maximum length.  (e.g.
-     * Openssl 1.0.1, so we don't check if the fragment length is >
-     * S2N_TLS_MAXIMUM_FRAGMENT_LENGTH. The on-the-wire max is 65k
+    /* Some servers send fragments that are above the maximum length (e.g.
+     * Openssl 1.0.1), so we don't check if the fragment length is >
+     * S2N_TLS_MAXIMUM_FRAGMENT_LENGTH. We allow up to 2^16.
+     *
+     *= https://tools.ietf.org/rfc/rfc8446#section-5.1
+     *= type=exception
+     *= reason=Incorrect implementations exist in the wild. Ignoring instead.
+     *# The length MUST NOT exceed 2^14 bytes.  An
+     *# endpoint that receives a record that exceeds this length MUST
+     *# terminate the connection with a "record_overflow" alert.
      */
+    POSIX_GUARD(s2n_stuffer_read_uint16(in, fragment_length));
     POSIX_GUARD(s2n_stuffer_reread(in));
 
     return 0;

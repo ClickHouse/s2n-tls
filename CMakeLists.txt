@@ -23,7 +23,6 @@ option(S2N_NO_PQ "Disables all Post Quantum Crypto code. You likely want this
 for older compilers or uncommon platforms." OFF)
 option(S2N_NO_PQ_ASM "Turns off the ASM for PQ Crypto even if it's available for the toolchain.
 You likely want this on older compilers." OFF)
-option(S2N_AWSLC_KYBER_UNSTABLE "Prefer the AWS-LC provided PQ implementation." OFF)
 option(SEARCH_LIBCRYPTO "Set this if you want to let S2N search libcrypto for you,
 otherwise a crypto target needs to be defined." ON)
 option(UNSAFE_TREAT_WARNINGS_AS_ERRORS "Compiler warnings are treated as errors. Warnings may
@@ -33,8 +32,14 @@ option(S2N_INTERN_LIBCRYPTO "This ensures that s2n-tls is compiled and deployed 
 version of libcrypto by interning the code and hiding symbols. This also enables s2n-tls to be
 loaded in an application with an otherwise conflicting libcrypto version." OFF)
 option(S2N_LTO, "Enables link time optimizations when building s2n-tls." OFF)
-option(S2N_STACKTRACE "Enables stacktrace functionality in s2n-tls." ON)
+option(S2N_STACKTRACE "Enables stacktrace functionality in s2n-tls. Note that this functionality is
+only available on platforms that support execinfo." ON)
 option(COVERAGE "Enable profiling collection for code coverage calculation" OFF)
+option(S2N_INTEG_TESTS "Enable the integrationv2 tests" OFF)
+option(S2N_FAST_INTEG_TESTS "Enable the integrationv2 with more parallelism, only has effect if S2N_INTEG_TESTS=ON" OFF)
+option(S2N_INSTALL_S2NC_S2ND "Install the binaries s2nc and s2nd" OFF)
+option(TSAN "Enable ThreadSanitizer to test thread safety" OFF)
+option(ASAN "Enable AddressSanitizer to test memory safety" OFF)
 
 # Turn BUILD_TESTING=ON by default
 include(CTest)
@@ -106,114 +111,6 @@ else()
     find_package(Threads REQUIRED)
 endif()
 
-if(S2N_NO_PQ_ASM)
-    message(STATUS "S2N_NO_PQ_ASM flag was detected - disabling PQ crypto assembly code")
-else()
-    enable_language(ASM)
-
-    # Kyber Round-3 code has several different optimizations which require
-    # specific compiler flags to be supported by the compiler.
-    # So for each needed instruction set extension we check if the compiler
-    # supports it and set proper compiler flags to be added later to the
-    # Kyber compilation units.
-    if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^(x86_64|amd64|AMD64)$")
-
-        set(KYBER512R3_AVX2_BMI2_FLAGS "-mavx2 -mavx -mbmi2")
-        try_compile(KYBER512R3_AVX2_BMI2_SUPPORTED
-            ${CMAKE_BINARY_DIR}
-            "${CMAKE_CURRENT_LIST_DIR}/tests/features/noop_main.c"
-            COMPILE_DEFINITIONS ${KYBER512R3_AVX2_BMI2_FLAGS})
-
-        try_compile(KYBER512R3_M256_INTRINSICS_SUPPORTED
-            ${CMAKE_BINARY_DIR}
-            "${CMAKE_CURRENT_LIST_DIR}/tests/features/m256_intrinsics.c")
-
-        # Some platforms support -mavx2 flag but not m256 intrinsics required to use them. Only enable Kyber assembly
-        # optimizations if both are supported. See https://github.com/aws/s2n-tls/pull/3005 for more info.
-        if(KYBER512R3_AVX2_BMI2_SUPPORTED AND KYBER512R3_M256_INTRINSICS_SUPPORTED)
-            set(KYBER512R3_AVX2_BMI2_OPT_SUPPORTED ON)
-        endif()
-    endif()
-endif()
-
-if(KYBER512R3_AVX2_BMI2_OPT_SUPPORTED)
-    FILE(GLOB KYBER512R3_AVX2_BMI2_ASM_SRCS "pq-crypto/kyber_r3/*_avx2.S")
-    list(APPEND PQ_SRC ${KYBER512R3_AVX2_BMI2_ASM_SRCS})
-endif()
-
-# Probe for execinfo.h extensions (not present on some systems, notably android)
-include(CheckCSourceCompiles)
-
-# Determine if execinfo.h is available
-if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
-try_compile(
-        S2N_HAVE_EXECINFO
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/execinfo.c"
-        LINK_LIBRARIES execinfo
-)
-else()
-try_compile(
-        S2N_HAVE_EXECINFO
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/execinfo.c"
-)
-endif()
-
-# Determine if cpuid.h is available
-try_compile(
-        S2N_CPUID_AVAILABLE
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/cpuid.c"
-)
-
-# Determine if features.h is available
-try_compile(
-        S2N_FEATURES_AVAILABLE
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/features.c"
-)
-
-# Determine if __attribute__((fallthrough)) is available
-try_compile(
-        FALL_THROUGH_SUPPORTED
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/fallthrough.c"
-        COMPILE_DEFINITIONS "-Werror"
-)
-
-# Determine if __restrict__ is available
-try_compile(
-        __RESTRICT__SUPPORTED
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/__restrict__.c"
-        COMPILE_DEFINITIONS "-Werror"
-)
-
-# Determine if madvise() is available
-try_compile(
-        MADVISE_SUPPORTED
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/madvise.c"
-        COMPILE_DEFINITIONS "-Werror"
-)
-
-# Determine if minherit() is available
-try_compile(
-        MINHERIT_SUPPORTED
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/minherit.c"
-        COMPILE_DEFINITIONS "-Werror"
-)
-
-# Determine if clone() is available
-try_compile(
-        CLONE_SUPPORTED
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/clone.c"
-        COMPILE_DEFINITIONS "-Werror"
-)
-
 if(APPLE)
     set(OS_LIBS c Threads::Threads)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
@@ -264,7 +161,7 @@ set(CMAKE_C_FLAGS_DEBUGOPT "")
 
 target_compile_options(${PROJECT_NAME} PRIVATE -pedantic -std=gnu99 -Wall -Wimplicit -Wunused -Wcomment -Wchar-subscripts
         -Wuninitialized -Wshadow -Wcast-align -Wwrite-strings -Wno-deprecated-declarations -Wno-unknown-pragmas -Wformat-security
-        -Wno-missing-braces -Wno-strict-prototypes -Wa,--noexecstack
+        -Wno-missing-braces -Wsign-compare -Wno-strict-prototypes -Wa,--noexecstack
 )
 
 if (UNSAFE_TREAT_WARNINGS_AS_ERRORS)
@@ -290,7 +187,7 @@ if(NOT APPLE)
 endif()
 
 if(S2N_NO_PQ)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_NO_PQ)
+    add_definitions(-DS2N_NO_PQ)
 endif()
 
 # Whether to fail the build when compiling s2n's portable C code with non-portable assembly optimizations. Doing this
@@ -302,33 +199,11 @@ if(S2N_BLOCK_NONPORTABLE_OPTIMIZATIONS)
     target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_BLOCK_NONPORTABLE_OPTIMIZATIONS=1)
 endif()
 
-if(KYBER512R3_AVX2_BMI2_OPT_SUPPORTED)
-    FILE(GLOB KYBER512R3_AVX2_BMI2_SRCS "pq-crypto/kyber_r3/*_avx2.c")
-    set_source_files_properties(${KYBER512R3_AVX2_BMI2_SRCS} PROPERTIES COMPILE_FLAGS ${KYBER512R3_AVX2_BMI2_FLAGS})
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_KYBER512R3_AVX2_BMI2)
-
-    message(STATUS "Enabling Kyber_R3 x86_64 optimizations")
-endif()
-
-if(S2N_HAVE_EXECINFO AND S2N_STACKTRACE)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_STACKTRACE)
-else()
-    message(STATUS "Disabling stacktrace functionality")
-endif()
-
-if(S2N_CPUID_AVAILABLE)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_CPUID_AVAILABLE)
-endif()
-
-if(S2N_FEATURES_AVAILABLE)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_FEATURES_AVAILABLE)
-endif()
-
 target_compile_options(${PROJECT_NAME} PUBLIC -fPIC)
 
-target_compile_definitions(${PROJECT_NAME} PRIVATE -D_POSIX_C_SOURCE=200809L)
+add_definitions(-D_POSIX_C_SOURCE=200809L)
 if(CMAKE_BUILD_TYPE MATCHES Release)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE -D_FORTIFY_SOURCE=2)
+    add_definitions(-D_FORTIFY_SOURCE=2)
 endif()
 
 if(NO_STACK_PROTECTOR)
@@ -339,32 +214,24 @@ if(S2N_UNSAFE_FUZZING_MODE)
     target_compile_options(${PROJECT_NAME} PRIVATE -fsanitize-coverage=trace-pc-guard -fsanitize=address,undefined,leak -fuse-ld=gold -DS2N_ADDRESS_SANITIZER=1)
 endif()
 
-if (FALL_THROUGH_SUPPORTED)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_FALL_THROUGH_SUPPORTED)
+if(TSAN)
+    target_compile_options(${PROJECT_NAME} PUBLIC -fsanitize=thread -DS2N_THREAD_SANITIZER=1)
+    target_link_options(${PROJECT_NAME} PUBLIC -fsanitize=thread)
 endif()
 
-if (__RESTRICT__SUPPORTED)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N___RESTRICT__SUPPORTED)
+if(ASAN)
+    target_compile_options(${PROJECT_NAME} PUBLIC -fsanitize=address -DS2N_ADDRESS_SANITIZER=1)
+    target_link_options(${PROJECT_NAME} PUBLIC -fsanitize=address)
 endif()
 
-if (MADVISE_SUPPORTED)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_MADVISE_SUPPORTED)
-    message(STATUS "madvise() support detected")
-endif()
-
-if (MINHERIT_SUPPORTED)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_MINHERIT_SUPPORTED)
-    message(STATUS "minherit() support detected")
-endif()
-
-if (CLONE_SUPPORTED)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_CLONE_SUPPORTED)
-    message(STATUS "clone() support detected")
+if(TSAN OR ASAN)
+    # no-omit-frame-pointer and no-optimize-sibling-calls provide better stack traces
+    target_compile_options(${PROJECT_NAME} PUBLIC -fno-omit-frame-pointer -fno-optimize-sibling-calls)
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 
-if (NOT $ENV{S2N_LIBCRYPTO} STREQUAL "awslc")
+if (NOT $ENV{S2N_LIBCRYPTO} MATCHES "awslc")
     # add cast-qual back in for non AWS-LC
     target_compile_options(${PROJECT_NAME} PRIVATE -Wcast-qual)
 endif()
@@ -406,61 +273,125 @@ if (S2N_INTERN_LIBCRYPTO)
     message(STATUS "Enabling libcrypto interning")
 endif()
 
-# Determine if EVP_md5_sha1 is available in libcrypto
-try_compile(
-        LIBCRYPTO_SUPPORTS_EVP_MD5_SHA1_HASH
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/evp_md5_sha1.c"
-        LINK_LIBRARIES ${LINK_LIB} ${OS_LIBS}
-)
-if (LIBCRYPTO_SUPPORTS_EVP_MD5_SHA1_HASH)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_LIBCRYPTO_SUPPORTS_EVP_MD5_SHA1_HASH)
+if (NOT DEFINED CMAKE_AR)
+    message(STATUS "CMAKE_AR undefined, setting to `ar` by default")
+    SET(CMAKE_AR ar)
+else()
+    message(STATUS "CMAKE_AR found: ${CMAKE_AR}")
 endif()
 
-# Determine if RC4 is available in libcrypto
-try_compile(
-        LIBCRYPTO_SUPPORTS_EVP_RC4
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/evp_rc4.c"
-        LINK_LIBRARIES ${LINK_LIB} ${OS_LIBS}
-)
-
-if (LIBCRYPTO_SUPPORTS_EVP_RC4)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_LIBCRYPTO_SUPPORTS_EVP_RC4)
+if (NOT DEFINED CMAKE_RANLIB)
+    message(STATUS "CMAKE_RANLIB undefined, setting to `ranlib` by default")
+    SET(CMAKE_RANLIB ranlib)
+else()
+    message(STATUS "CMAKE_RANLIB found: ${CMAKE_RANLIB}")
 endif()
 
-# Determine if EVP_MD_CTX_set_pkey_ctx is available in libcrypto
-try_compile(
-        LIBCRYPTO_SUPPORTS_EVP_MD_CTX_SET_PKEY_CTX
+if (NOT DEFINED CMAKE_OBJCOPY)
+    message(STATUS "CMAKE_OBJCOPY undefined, setting to `objcopy` by default")
+    SET(CMAKE_OBJCOPY objcopy)
+else()
+    message(STATUS "CMAKE_OBJCOPY found: ${CMAKE_OBJCOPY}")
+endif()
+
+# Sets the result of the feature probe to `IS_AVAILABLE`
+function(feature_probe_result PROBE_NAME IS_AVAILABLE)
+    # normalize the boolean value
+    if(IS_AVAILABLE)
+        set(NORMALIZED TRUE)
+    else()
+        set(NORMALIZED FALSE)
+    endif()
+
+    # indicate the status of the probe
+    message(STATUS "feature ${PROBE_NAME}: ${NORMALIZED}")
+    # set the probe result in the parent scope for other probes
+    set(${PROBE_NAME} ${NORMALIZED} PARENT_SCOPE)
+
+    # define the probe if available
+    if(NORMALIZED)
+        add_definitions(-D${PROBE_NAME})
+    endif()
+endfunction()
+
+# Tries to compile a feature probe and initializes the corresponding flags
+function(feature_probe PROBE_NAME)
+    # Load the global probe flags
+    file(READ "${CMAKE_CURRENT_LIST_DIR}/tests/features/GLOBAL.flags" GLOBAL_FILE)
+    string(REPLACE "\n" "" GLOBAL_FLAGS "${GLOBAL_FILE}")
+
+    # Load the probe's flags
+    file(READ "${CMAKE_CURRENT_LIST_DIR}/tests/features/${PROBE_NAME}.flags" PROBE_FILE)
+    string(REPLACE "\n" "" PROBE_FLAGS "${PROBE_FILE}")
+
+    # Try to compile the probe with the given flags
+    try_compile(
+        IS_AVAILABLE
         ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/evp_md_ctx_set_pkey_ctx.c"
+        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/${PROBE_NAME}.c"
         LINK_LIBRARIES ${LINK_LIB} ${OS_LIBS}
         CMAKE_FLAGS ${ADDITIONAL_FLAGS}
-)
+        COMPILE_DEFINITIONS -c ${GLOBAL_FLAGS} ${PROBE_FLAGS}
+        ${ARGN}
+        OUTPUT_VARIABLE TRY_COMPILE_OUTPUT
+    )
+    # Uncomment the line below to get the output of the try_compile command
+    #message(STATUS "Output of try_compile: ${TRY_COMPILE_OUTPUT}")
 
-if (LIBCRYPTO_SUPPORTS_EVP_MD_CTX_SET_PKEY_CTX)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_LIBCRYPTO_SUPPORTS_EVP_MD_CTX_SET_PKEY_CTX)
+    # Set the result of the probe
+    feature_probe_result(${PROBE_NAME} ${IS_AVAILABLE})
+
+    # Make sure the variable is set in the parent scope
+    set(${PROBE_NAME} ${IS_AVAILABLE} PARENT_SCOPE)
+
+    # Set the flags that we used for the probe
+    set(${PROBE_NAME}_FLAGS ${PROBE_FLAGS} PARENT_SCOPE)
+endfunction()
+
+# Iterate over all of the features and try to compile them
+FILE(GLOB FEATURE_SRCS "${CMAKE_CURRENT_LIST_DIR}/tests/features/*.c")
+list(SORT FEATURE_SRCS)
+foreach(file ${FEATURE_SRCS})
+    get_filename_component(feature_name ${file} NAME_WE)
+    feature_probe(${feature_name})
+endforeach()
+
+# FreeBSD might need to link to execinfo explicitly
+if(NOT S2N_EXECINFO_AVAILABLE AND CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    feature_probe(S2N_EXECINFO_AVAILABLE LINK_LIBRARIES execinfo)
 endif()
 
-# Determine if Kyber512 implementation from AWS-LC is available
-try_compile(
-        LIBCRYPTO_SUPPORTS_EVP_KYBER_512
-        ${CMAKE_BINARY_DIR}
-        SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/features/evp_kyber_512.c"
-        LINK_LIBRARIES ${LINK_LIB} ${OS_LIBS}
-        COMPILE_DEFINITIONS "-Werror"
-)
-
-if(S2N_AWSLC_KYBER_UNSTABLE AND LIBCRYPTO_SUPPORTS_EVP_KYBER_512)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_LIBCRYPTO_SUPPORTS_KYBER512)
+# Stack traces are only available if execinfo is
+if (NOT S2N_EXECINFO_AVAILABLE)
+    set(S2N_STACKTRACE FALSE)
 endif()
+feature_probe_result(S2N_STACKTRACE ${S2N_STACKTRACE})
 
-if (NOT DEFINED CMAKE_AR)
-	message(STATUS "CMAKE_AR undefined, setting to `ar` by default")
-	SET(CMAKE_AR ar)
-else()
-	message(STATUS "CMAKE_AR found: ${CMAKE_AR}")
+set(S2N_KYBER512R3_AVX2_BMI2 FALSE)
+if(NOT S2N_NO_PQ_ASM)
+    # Kyber Round-3 code has several different optimizations which require
+    # specific compiler flags to be supported by the compiler.
+    # So for each needed instruction set extension we check if the compiler
+    # supports it and set proper compiler flags to be added later to the
+    # Kyber compilation units.
+    if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^(x86_64|amd64|AMD64)$")
+        # Some platforms support -mavx2 flag but not m256 intrinsics required to use them. Only enable Kyber assembly
+        # optimizations if both are supported. See https://github.com/aws/s2n-tls/pull/3005 for more info.
+        if(S2N_KYBER512R3_AVX2_BMI2_SUPPORTED AND S2N_KYBER512R3_M256_INTRINSICS_SUPPORTED)
+            set(S2N_KYBER512R3_AVX2_BMI2 TRUE)
+            enable_language(ASM)
+
+            # add the assembly files to the project
+            FILE(GLOB KYBER512R3_AVX2_BMI2_ASM_SRCS "pq-crypto/kyber_r3/*_avx2.S")
+            target_sources(${PROJECT_NAME} PRIVATE ${KYBER512R3_AVX2_BMI2_ASM_SRCS})
+
+            # compile the C files with avx flags
+            FILE(GLOB KYBER512R3_AVX2_BMI2_SRCS "pq-crypto/kyber_r3/*_avx2.c")
+            set_source_files_properties(${KYBER512R3_AVX2_BMI2_SRCS} PROPERTIES COMPILE_FLAGS ${S2N_KYBER512R3_AVX2_BMI2_SUPPORTED_FLAGS})
+        endif()
+    endif()
 endif()
+feature_probe_result(S2N_KYBER512R3_AVX2_BMI2 ${S2N_KYBER512R3_AVX2_BMI2})
 
 if (S2N_INTERN_LIBCRYPTO)
 
@@ -498,14 +429,14 @@ if (S2N_INTERN_LIBCRYPTO)
           # copy the static version of libcrypto
           cp ${crypto_STATIC_LIBRARY} s2n_libcrypto.a &&
           # dump all of the symbols and prefix them with `s2n$`
-          bash -c "nm s2n_libcrypto.a | awk '/ [A-Z] /{print $3\" s2n$\"$3}' | sort | uniq > libcrypto.symbols" &&
+          bash -c "${CMAKE_NM} s2n_libcrypto.a | awk '/ [A-Z] /{print $3\" s2n$\"$3}' | sort | uniq > libcrypto.symbols" &&
           # redefine the libcrypto libary symbols
-          objcopy --redefine-syms libcrypto.symbols s2n_libcrypto.a &&
+          ${CMAKE_OBJCOPY} --redefine-syms libcrypto.symbols s2n_libcrypto.a &&
           rm -rf s2n_libcrypto &&
           mkdir s2n_libcrypto &&
           cd s2n_libcrypto &&
           # extract libcrypto objects from the archive
-	  ${CMAKE_AR} x ../s2n_libcrypto.a &&
+          ${CMAKE_AR} x ../s2n_libcrypto.a &&
           # rename all of the object files so we don't have any object name collisions
           bash -c "find . -name '*.o' -type f -print0 | xargs -0 -n1 -- basename | xargs -I{} mv {} s2n_crypto__{}"
         VERBATIM
@@ -543,7 +474,7 @@ if (S2N_INTERN_LIBCRYPTO)
             TARGET ${PROJECT_NAME} POST_BUILD
             DEPENDS libcrypto.symbols
             COMMAND
-              bash -c "ar -r lib/libs2n.a s2n_libcrypto/*.o"
+                bash -c "${CMAKE_AR} -r lib/libs2n.a s2n_libcrypto/*.o"
             VERBATIM
         )
     endif()
@@ -561,9 +492,10 @@ if (BUILD_TESTING)
     enable_testing()
 
     file(GLOB TESTLIB_SRC "tests/testlib/*.c")
+    file(GLOB EXAMPLES_SRC "docs/examples/*.c")
     file(GLOB TESTLIB_HEADERS "tests/testlib/*.h" "tests/s2n_test.h")
 
-    add_library(testss2n STATIC ${TESTLIB_HEADERS} ${TESTLIB_SRC})
+    add_library(testss2n STATIC ${TESTLIB_HEADERS} ${TESTLIB_SRC} ${EXAMPLES_SRC})
     target_include_directories(testss2n PUBLIC tests)
     target_compile_options(testss2n PRIVATE -std=gnu99)
     target_link_libraries(testss2n PUBLIC ${PROJECT_NAME})
@@ -580,6 +512,34 @@ if (BUILD_TESTING)
     #run unit tests
     file (GLOB TEST_LD_PRELOAD "tests/LD_PRELOAD/*.c")
     add_library(allocator_overrides SHARED ${TEST_LD_PRELOAD})
+
+    set(UNIT_TEST_ENVS S2N_DONT_MLOCK=1)
+    if (TSAN OR ASAN)
+        set(UNIT_TEST_ENVS ${UNIT_TEST_ENVS} S2N_ADDRESS_SANITIZER=1)
+    endif()
+    if(TSAN)
+        set(TSAN_SUPPRESSIONS_FILE ${CMAKE_SOURCE_DIR}/tests/.tsan_suppressions)
+        if(NOT EXISTS ${TSAN_SUPPRESSIONS_FILE})
+            message(FATAL_ERROR "TSAN suppression file ${TSAN_SUPPRESSIONS_FILE} missing")
+        endif()
+        set(TSAN_OPTIONS suppressions=${TSAN_SUPPRESSIONS_FILE})
+        if(DEFINED ENV{TSAN_OPTIONS})
+            set(TSAN_OPTIONS "${TSAN_OPTIONS} $ENV{TSAN_OPTIONS}")
+        endif()
+        set(UNIT_TEST_ENVS ${UNIT_TEST_ENVS} TSAN_OPTIONS=${TSAN_OPTIONS})
+    endif()
+    if(ASAN)
+        # "detect_odr_violation" detects violations of the "one definition rule",
+        # ensuring that symbols are only defined once.
+        # But some of our unit tests intentionally include *.c files for testing,
+        # resulting in duplicate global values.
+        set(ASAN_OPTIONS detect_odr_violation=0)
+        if(DEFINED ENV{ASAN_OPTIONS})
+            set(ASAN_OPTIONS "${ASAN_OPTIONS} $ENV{ASAN_OPTIONS}")
+        endif()
+        set(UNIT_TEST_ENVS ${UNIT_TEST_ENVS} ASAN_OPTIONS=${ASAN_OPTIONS})
+    endif()
+    message(STATUS "Running tests with environment: ${UNIT_TEST_ENVS}")
 
     file(GLOB UNITTESTS_SRC "tests/unit/*.c")
     foreach(test_case ${UNITTESTS_SRC})
@@ -599,19 +559,12 @@ if (BUILD_TESTING)
             )
         endif()
         target_compile_options(${test_case_name} PRIVATE -Wno-implicit-function-declaration -Wno-deprecated -D_POSIX_C_SOURCE=200809L -std=gnu99)
+        if (S2N_LTO)
+            target_compile_options(${test_case_name} PRIVATE -flto)
+        endif()
         add_test(NAME ${test_case_name} COMMAND $<TARGET_FILE:${test_case_name}> WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit)
-
-        set_property(
-        TEST
-            ${test_case_name}
-        PROPERTY
-            ENVIRONMENT LD_PRELOAD=$<TARGET_FILE:allocator_overrides>)
-
-        set_property(
-        TEST
-            ${test_case_name}
-        PROPERTY
-            ENVIRONMENT S2N_DONT_MLOCK=1)
+        set_property(TEST ${test_case_name} PROPERTY LABELS "unit")
+        set_property(TEST ${test_case_name} PROPERTY ENVIRONMENT ${UNIT_TEST_ENVS})
 
     endforeach(test_case)
 
@@ -619,13 +572,14 @@ if (BUILD_TESTING)
     target_link_libraries(s2nc ${PROJECT_NAME})
 
     target_include_directories(s2nc PRIVATE api)
-    target_compile_options(s2nc PRIVATE -std=gnu99 -D_POSIX_C_SOURCE=200112L)
+    target_compile_options(s2nc PRIVATE -std=gnu99)
+
 
     add_executable(s2nd "bin/s2nd.c" "bin/echo.c" "bin/https.c" "bin/common.c")
     target_link_libraries(s2nd ${PROJECT_NAME})
 
     target_include_directories(s2nd PRIVATE api)
-    target_compile_options(s2nd PRIVATE -std=gnu99 -D_POSIX_C_SOURCE=200112L)
+    target_compile_options(s2nd PRIVATE -std=gnu99)
 
     if(S2N_LTO)
         target_compile_options(s2nc PRIVATE -flto)
@@ -650,7 +604,51 @@ if (BUILD_TESTING)
                     -Wno-unknown-pragmas -Wformat-security -Wno-missing-braces -fvisibility=hidden -Wno-unreachable-code
                     -Wno-unused-but-set-variable)
         endforeach(benchmark)
+    endif()
 
+    if (S2N_INTEG_TESTS)
+        find_package (Python3 COMPONENTS Interpreter Development)
+        file(GLOB integv2_test_files "${PROJECT_SOURCE_DIR}/tests/integrationv2/test_*.py")
+        foreach(test_file_path ${integv2_test_files})
+            get_filename_component(test_filename ${test_file_path} NAME_WE)
+            string(REGEX REPLACE "^test_" "integrationv2_" test_target ${test_filename})
+            if (S2N_INTEG_NIX)
+                # For Nix and environments where LD_LIBRARY_PATH is already correct.
+                # We're also dropping tox and calling pytest directly, because
+                # Nix is already handling all of the python setup.
+                if (CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" AND ${test_target} STREQUAL "integrationv2_sslyze" )
+                  # sslyze/nassl is not available on aarch64.
+                  message(WARNING "Skipping ${test_target} due to missing tools on ${CMAKE_SYSTEM_PROCESSOR}")
+                  continue()
+                endif()
+                message(STATUS "Adding integ test ${test_target}")
+                add_test(NAME ${test_target}
+                        COMMAND
+                        pytest
+                        -x -n=1 --maxfail=1 --reruns=0 --cache-clear -rpfsq
+                        -o log_cli=true --log-cli-level=DEBUG --provider-version=$ENV{S2N_LIBCRYPTO}
+                        --provider-criterion=off --fips-mode=0 --no-pq=0 ${test_file_path}
+                        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/tests/integrationv2
+                )
+            else()
+                # For use with libcryptos built into test-deps, and not in LD_LIBRARY_PATH.
+                # This is a duplication of tests/integrationv2/Makefile and
+                # can go away once all the Nix porting is finished.
+                add_test(NAME ${test_target}
+                        COMMAND
+                        ${CMAKE_COMMAND} -E env
+                        DYLD_LIBRARY_PATH=${PROJECT_SOURCE_DIR}/libcrypto-root/lib:$ENV{DYLD_LIBRARY_PATH}
+                        LD_LIBRARY_PATH=${PROJECT_SOURCE_DIR}/libcrypto-root/lib:${PROJECT_SOURCE_DIR}/test-deps/openssl-1.1.1/lib:${PROJECT_SOURCE_DIR}/test-deps/gnutls37/nettle/lib:$ENV{LD_LIBRARY_PATH}
+                        PATH=${PROJECT_SOURCE_DIR}/bin:${PROJECT_SOURCE_DIR}/test-deps/openssl-1.1.1/bin:${PROJECT_SOURCE_DIR}/test-deps/gnutls37/bin:$ENV{PATH}
+                        PYTHONNOUSERSITE=1
+                        S2N_INTEG_TEST=1
+                        TOX_TEST_NAME=${test_file_path}
+                        ${Python3_EXECUTABLE} -m tox
+                        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/tests/integrationv2)
+            endif()
+            set_property(TEST ${test_target} PROPERTY LABELS "integrationv2")
+            set_property(TEST ${test_target} PROPERTY TIMEOUT 7200)
+        endforeach()
     endif()
 endif()
 
@@ -664,6 +662,12 @@ elseif(NOT DEFINED CMAKE_INSTALL_LIBDIR)
     set(CMAKE_INSTALL_LIBDIR "lib")
 endif()
 
+if (S2N_INSTALL_S2NC_S2ND)
+  install(
+    TARGETS s2nc s2nd RUNTIME DESTINATION bin
+    )
+endif()
+
 install(
         TARGETS ${PROJECT_NAME}
         EXPORT ${PROJECT_NAME}-targets
@@ -671,6 +675,7 @@ install(
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT Runtime
         RUNTIME DESTINATION bin COMPONENT Runtime
 )
+
 
 configure_file("cmake/${PROJECT_NAME}-config.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config.cmake"

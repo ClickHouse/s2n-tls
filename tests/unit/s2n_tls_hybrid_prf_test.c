@@ -86,8 +86,10 @@ int main(int argc, char **argv)
 
         POSIX_GUARD(ReadHex(kat_file, expected_master_secret, MASTER_SECRET_LENGTH, "master_secret = "));
 
-        struct s2n_blob classic_pms = { .data = premaster_classic_secret, .size = PREMASTER_CLASSIC_SECRET_LENGTH };
-        struct s2n_blob kem_pms = { .data = premaster_kem_secret, .size = premaster_kem_secret_length };
+        struct s2n_blob classic_pms = { 0 };
+        EXPECT_SUCCESS(s2n_blob_init(&classic_pms, premaster_classic_secret, PREMASTER_CLASSIC_SECRET_LENGTH));
+        struct s2n_blob kem_pms = { 0 };
+        EXPECT_SUCCESS(s2n_blob_init(&kem_pms, premaster_kem_secret, premaster_kem_secret_length));
 
         /* In the future the hybrid_kex client_key_send (client side) and client_key_receive (server side) will concatenate the two parts */
         DEFER_CLEANUP(struct s2n_blob combined_pms = { 0 }, s2n_free);
@@ -105,7 +107,7 @@ int main(int argc, char **argv)
         EXPECT_MEMCPY_SUCCESS(conn->kex_params.client_key_exchange_message.data, client_key_exchange_message, client_key_exchange_message_length);
 
         EXPECT_SUCCESS(s2n_hybrid_prf_master_secret(conn, &combined_pms));
-        EXPECT_BYTEARRAY_EQUAL(expected_master_secret, conn->secrets.tls12.master_secret, S2N_TLS_SECRET_LEN);
+        EXPECT_BYTEARRAY_EQUAL(expected_master_secret, conn->secrets.version.tls12.master_secret, S2N_TLS_SECRET_LEN);
         EXPECT_SUCCESS(s2n_free(&conn->kex_params.client_key_exchange_message));
         EXPECT_SUCCESS(s2n_connection_free(conn));
 
@@ -117,5 +119,6 @@ int main(int argc, char **argv)
         FAIL_MSG("Found unexpected test vectors in the KAT file. Has the KAT file been changed? Did you update NUM_TEST_VECTORS?");
     }
 
+    fclose(kat_file);
     END_TEST();
 }

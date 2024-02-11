@@ -38,6 +38,11 @@
 
 #define MAX_CERTIFICATES 50
 
+/*
+ * s2nd is an example server that uses many s2n-tls APIs.
+ * It is intended for testing purposes only, and should not be used in production.
+ */
+
 static char default_certificate_chain[] =
         "-----BEGIN CERTIFICATE-----"
         "MIIDHTCCAgWgAwIBAgIUPxywpg3/+VHmj8jJSvK62XC06zMwDQYJKoZIhvcNAQEL"
@@ -202,6 +207,8 @@ void usage()
     fprintf(stderr, "    Display this message and quit.\n");
     fprintf(stderr, "  --buffered-send <buffer size>\n");
     fprintf(stderr, "    Set s2n_send to buffer up to <buffer size> bytes before sending records over the wire.\n");
+    fprintf(stderr, "  -X, --max-conns <max connections>\n");
+    fprintf(stderr, "    Sets the max number of connections s2nd will accept before shutting down.\n");
     /* clang-format on */
     exit(1);
 }

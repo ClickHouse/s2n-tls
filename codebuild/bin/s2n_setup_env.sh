@@ -48,6 +48,7 @@ source codebuild/bin/s2n_set_build_preset.sh
 : "${BORINGSSL_INSTALL_DIR:=$TEST_DEPS_DIR/boringssl}"
 : "${AWSLC_INSTALL_DIR:=$TEST_DEPS_DIR/awslc}"
 : "${AWSLC_FIPS_INSTALL_DIR:=$TEST_DEPS_DIR/awslc-fips}"
+: "${AWSLC_FIPS_2022_INSTALL_DIR:=$TEST_DEPS_DIR/awslc-fips-2022}"
 : "${LIBRESSL_INSTALL_DIR:=$TEST_DEPS_DIR/libressl}"
 : "${CPPCHECK_INSTALL_DIR:=$TEST_DEPS_DIR/cppcheck}"
 : "${CTVERIF_INSTALL_DIR:=$TEST_DEPS_DIR/ctverif}"
@@ -88,6 +89,7 @@ export GCC_VERSION
 export LATEST_CLANG
 export TESTS
 export BASE_S2N_DIR
+export TEST_DEPS_DIR
 export PYTHON_INSTALL_DIR
 export GNUTLS_INSTALL_DIR
 export GNUTLS37_INSTALL_DIR
@@ -105,6 +107,8 @@ export OPENSSL_1_0_2_FIPS_INSTALL_DIR
 export OQS_OPENSSL_1_1_1_INSTALL_DIR
 export BORINGSSL_INSTALL_DIR
 export AWSLC_INSTALL_DIR
+export AWSLC_FIPS_INSTALL_DIR
+export AWSLC_FIPS_2022_INSTALL_DIR
 export LIBRESSL_INSTALL_DIR
 export CPPCHECK_INSTALL_DIR
 export CTVERIF_INSTALL_DIR
@@ -140,12 +144,18 @@ if [[ "$S2N_LIBCRYPTO" == "awslc-fips" ]]; then
   export LIBCRYPTO_ROOT=$AWSLC_FIPS_INSTALL_DIR ;
   export S2N_TEST_IN_FIPS_MODE=1 ;
 fi
+if [[ "$S2N_LIBCRYPTO" == "awslc-fips-2022" ]]; then
+  export LIBCRYPTO_ROOT=$AWSLC_FIPS_2022_INSTALL_DIR
+  export S2N_TEST_IN_FIPS_MODE=1
+fi
 
 if [[ "$S2N_LIBCRYPTO" == "libressl" ]]; then export LIBCRYPTO_ROOT=$LIBRESSL_INSTALL_DIR ; fi
 
-# Create a link to the selected libcrypto. This shouldn't be needed when LIBCRYPTO_ROOT is set, but some tests
-# have the "libcrypto-root" directory path hardcoded.
-rm -rf libcrypto-root && ln -s "$LIBCRYPTO_ROOT" libcrypto-root
+if [[ -n "${LIBCRYPTO_ROOT:-}" ]]; then
+  # Create a link to the selected libcrypto. This shouldn't be needed when LIBCRYPTO_ROOT is set, but some tests
+  # have the "libcrypto-root" directory path hardcoded.
+  rm -rf libcrypto-root && ln -s "$LIBCRYPTO_ROOT" libcrypto-root
+fi
 
 # Set the libfuzzer to use for fuzz tests
 export LIBFUZZER_ROOT=$LIBFUZZER_INSTALL_DIR
@@ -211,11 +221,10 @@ set_cc
 echo "UID=$UID"
 echo "OS_NAME=$OS_NAME"
 echo "S2N_LIBCRYPTO=$S2N_LIBCRYPTO"
-echo "LIBCRYPTO_ROOT=$LIBCRYPTO_ROOT"
+echo "LIBCRYPTO_ROOT=${LIBCRYPTO_ROOT:-}"
 echo "BUILD_S2N=$BUILD_S2N"
 echo "GCC_VERSION=$GCC_VERSION"
 echo "LATEST_CLANG=$LATEST_CLANG"
 echo "TESTS=$TESTS"
 echo "PATH=$PATH"
 echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-

@@ -26,11 +26,13 @@
 #include "tls/s2n_alerts.h"
 #include "tls/s2n_connection.h"
 #include "tls/s2n_handshake.h"
+#include "tls/s2n_ktls.h"
 #include "tls/s2n_post_handshake.h"
 #include "tls/s2n_record.h"
 #include "tls/s2n_resume.h"
 #include "tls/s2n_tls.h"
 #include "utils/s2n_blob.h"
+#include "utils/s2n_io.h"
 #include "utils/s2n_safety.h"
 #include "utils/s2n_socket.h"
 
@@ -42,14 +44,9 @@ S2N_RESULT s2n_read_in_bytes(struct s2n_connection *conn, struct s2n_stuffer *ou
         errno = 0;
         int r = s2n_connection_recv_stuffer(output, conn, remaining);
         if (r == 0) {
-            conn->closed = 1;
-            RESULT_BAIL(S2N_ERR_CLOSED);
-        } else if (r < 0) {
-            if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                RESULT_BAIL(S2N_ERR_IO_BLOCKED);
-            }
-            RESULT_BAIL(S2N_ERR_IO);
+            s2n_atomic_flag_set(&conn->read_closed);
         }
+        RESULT_GUARD(s2n_io_check_read_result(r));
         conn->wire_bytes_in += r;
     }
 
@@ -59,6 +56,10 @@ S2N_RESULT s2n_read_in_bytes(struct s2n_connection *conn, struct s2n_stuffer *ou
 int s2n_read_full_record(struct s2n_connection *conn, uint8_t *record_type, int *isSSLv2)
 {
     *isSSLv2 = 0;
+
+    if (conn->ktls_recv_enabled) {
+        return s2n_ktls_read_full_record(conn, record_type);
+    }
 
     /* If the record has already been decrypted, then leave it alone */
     if (conn->in_status == PLAINTEXT) {
@@ -108,38 +109,54 @@ int s2n_read_full_record(struct s2n_connection *conn, uint8_t *record_type, int 
     return 0;
 }
 
-ssize_t s2n_recv_impl(struct s2n_connection *conn, void *buf, ssize_t size, s2n_blocked_status *blocked)
+ssize_t s2n_recv_impl(struct s2n_connection *conn, void *buf, ssize_t size_signed, s2n_blocked_status *blocked)
 {
+    POSIX_ENSURE_GTE(size_signed, 0);
+    size_t size = size_signed;
     ssize_t bytes_read = 0;
     struct s2n_blob out = { 0 };
     POSIX_GUARD(s2n_blob_init(&out, (uint8_t *) buf, 0));
 
-    if (conn->closed) {
+    /*
+     * Set the `blocked` status to BLOCKED_ON_READ by default
+     *
+     * The only case in which it should be updated is on a successful read into the provided buffer.
+     *
+     * Unfortunately, the current `blocked` behavior has become ossified by buggy applications that ignore
+     * error types and only read `blocked`. As such, it's very important to avoid changing how this value is updated
+     * as it could break applications.
+     */
+    *blocked = S2N_BLOCKED_ON_READ;
+
+    if (!s2n_connection_check_io_status(conn, S2N_IO_READABLE)) {
+        /*
+         *= https://tools.ietf.org/rfc/rfc8446#6.1
+         *# If a transport-level close
+         *# is received prior to a "close_notify", the receiver cannot know that
+         *# all the data that was sent has been received.
+         *
+         *= https://tools.ietf.org/rfc/rfc8446#6.1
+         *# If the application protocol using TLS provides that any data may be
+         *# carried over the underlying transport after the TLS connection is
+         *# closed, the TLS implementation MUST receive a "close_notify" alert
+         *# before indicating end-of-data to the application layer.
+         */
+        POSIX_ENSURE(s2n_atomic_flag_test(&conn->close_notify_received), S2N_ERR_CLOSED);
+        *blocked = S2N_NOT_BLOCKED;
         return 0;
     }
-    *blocked = S2N_BLOCKED_ON_READ;
 
     POSIX_ENSURE(!s2n_connection_is_quic_enabled(conn), S2N_ERR_UNSUPPORTED_WITH_QUIC);
     POSIX_GUARD_RESULT(s2n_early_data_validate_recv(conn));
 
-    while (size && !conn->closed) {
+    while (size && s2n_connection_check_io_status(conn, S2N_IO_READABLE)) {
         int isSSLv2 = 0;
         uint8_t record_type;
         int r = s2n_read_full_record(conn, &record_type, &isSSLv2);
         if (r < 0) {
-            if (s2n_errno == S2N_ERR_CLOSED) {
-                *blocked = S2N_NOT_BLOCKED;
-                if (!bytes_read) {
-                    return 0;
-                } else {
-                    return bytes_read;
-                }
-            }
-
-            /* Don't propagate the error if we already read some bytes */
-            if (s2n_errno == S2N_ERR_IO_BLOCKED && bytes_read) {
-                s2n_errno = S2N_ERR_OK;
-                return bytes_read;
+            /* Don't propagate the error if we already read some bytes. */
+            if (bytes_read && (s2n_errno == S2N_ERR_CLOSED || s2n_errno == S2N_ERR_IO_BLOCKED)) {
+                break;
             }
 
             /* If we get here, it's an error condition */
@@ -174,7 +191,6 @@ ssize_t s2n_recv_impl(struct s2n_connection *conn, void *buf, ssize_t size, s2n_
             switch (record_type) {
                 case TLS_ALERT:
                     POSIX_GUARD(s2n_process_alert_fragment(conn));
-                    POSIX_GUARD(s2n_flush(conn, blocked));
                     break;
                 case TLS_HANDSHAKE: {
                     s2n_result result = s2n_post_handshake_recv(conn);
@@ -214,6 +230,13 @@ ssize_t s2n_recv_impl(struct s2n_connection *conn, void *buf, ssize_t size, s2n_
         }
     }
 
+    /* Due to the history of this API, some applications depend on the blocked status to know if
+     * the connection's `in` stuffer was completely cleared. This behavior needs to be preserved.
+     *
+     * Moving forward, applications should instead use `s2n_peek`, which accomplishes the same thing
+     * without conflating being blocked on reading from the OS socket vs blocked on the application's
+     * buffer size.
+     */
     if (s2n_stuffer_data_available(&conn->in) == 0) {
         *blocked = S2N_NOT_BLOCKED;
     }

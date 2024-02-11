@@ -97,7 +97,7 @@ static int s2n_setup_test_resumption_secret(struct s2n_connection *conn)
     /* Set up resumption secret */
     struct s2n_blob secret = { 0 };
     struct s2n_stuffer secret_stuffer = { 0 };
-    EXPECT_SUCCESS(s2n_blob_init(&secret, conn->secrets.tls13.resumption_master_secret, S2N_TLS_SECRET_LEN));
+    EXPECT_SUCCESS(s2n_blob_init(&secret, conn->secrets.version.tls13.resumption_master_secret, S2N_TLS_SECRET_LEN));
     EXPECT_SUCCESS(s2n_stuffer_init(&secret_stuffer, &secret));
     EXPECT_SUCCESS(s2n_stuffer_write_bytes(&secret_stuffer, test_resumption_secret.data, test_resumption_secret.size));
 
@@ -851,24 +851,31 @@ int main(int argc, char **argv)
 
         /* Protocol is less than TLS13 */
         {
-            struct s2n_connection *conn;
-            EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_SERVER));
-            conn->actual_protocol_version = S2N_TLS12;
+            DEFER_CLEANUP(struct s2n_config *config = s2n_config_new(),
+                    s2n_config_ptr_free);
+            EXPECT_NOT_NULL(config);
+            EXPECT_SUCCESS(s2n_setup_test_ticket_key(config));
+
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_SERVER),
+                    s2n_connection_ptr_free);
+            EXPECT_NOT_NULL(conn);
+            EXPECT_SUCCESS(s2n_connection_set_config(conn, config));
+            conn->secure->cipher_suite = &s2n_tls13_aes_128_gcm_sha256;
             conn->tickets_to_send = 1;
 
-            /* Setup io */
-            struct s2n_stuffer stuffer = { 0 };
+            DEFER_CLEANUP(struct s2n_stuffer stuffer = { 0 }, s2n_stuffer_free);
             EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&stuffer, 0));
             EXPECT_SUCCESS(s2n_connection_set_io_stuffers(&stuffer, &stuffer, conn));
 
             s2n_blocked_status blocked = 0;
-            EXPECT_OK(s2n_tls13_server_nst_send(conn, &blocked));
 
-            EXPECT_EQUAL(0, s2n_stuffer_data_available(&stuffer));
+            conn->actual_protocol_version = S2N_TLS12;
+            EXPECT_ERROR(s2n_tls13_server_nst_send(conn, &blocked));
             EXPECT_TICKETS_SENT(conn, 0);
 
-            EXPECT_SUCCESS(s2n_stuffer_free(&stuffer));
-            EXPECT_SUCCESS(s2n_connection_free(conn));
+            conn->actual_protocol_version = S2N_TLS13;
+            EXPECT_OK(s2n_tls13_server_nst_send(conn, &blocked));
+            EXPECT_TICKETS_SENT(conn, 1);
         };
 
         /* 0 tickets are requested */
@@ -902,6 +909,38 @@ int main(int argc, char **argv)
             EXPECT_SUCCESS(s2n_stuffer_free(&stuffer));
             EXPECT_SUCCESS(s2n_connection_free(conn));
             EXPECT_SUCCESS(s2n_config_free(config));
+        };
+
+        /* QUIC mode is enabled */
+        {
+            DEFER_CLEANUP(struct s2n_config *config = s2n_config_new(),
+                    s2n_config_ptr_free);
+            EXPECT_NOT_NULL(config);
+            EXPECT_SUCCESS(s2n_setup_test_ticket_key(config));
+
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_SERVER),
+                    s2n_connection_ptr_free);
+            EXPECT_NOT_NULL(conn);
+            EXPECT_SUCCESS(s2n_connection_set_config(conn, config));
+            conn->secure->cipher_suite = &s2n_tls13_aes_128_gcm_sha256;
+            conn->tickets_to_send = 1;
+            conn->actual_protocol_version = S2N_TLS13;
+
+            DEFER_CLEANUP(struct s2n_stuffer stuffer = { 0 }, s2n_stuffer_free);
+            EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&stuffer, 0));
+            EXPECT_SUCCESS(s2n_connection_set_io_stuffers(&stuffer, &stuffer, conn));
+
+            s2n_blocked_status blocked = 0;
+
+            conn->quic_enabled = true;
+            /* No mutually-supported psk mode agreed upon */
+            EXPECT_OK(s2n_tls13_server_nst_send(conn, &blocked));
+            EXPECT_TICKETS_SENT(conn, 0);
+
+            /* Client has indicated that it supports both resumption and psk_dhe_ke mode */
+            conn->psk_params.psk_ke_mode = S2N_PSK_DHE_KE;
+            EXPECT_OK(s2n_tls13_server_nst_send(conn, &blocked));
+            EXPECT_TICKETS_SENT(conn, 1);
         };
 
         /* Sends one new session ticket */

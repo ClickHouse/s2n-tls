@@ -453,14 +453,20 @@ int main(int argc, char **argv)
         server_conn->psk_params.chosen_psk = &chosen_psk;
         EXPECT_SUCCESS(s2n_client_hello_recv(server_conn));
 
-        EXPECT_EQUAL(server_conn->handshake_params.conn_sig_scheme.iana_value, 0);
+        EXPECT_EQUAL(server_conn->handshake_params.server_cert_sig_scheme->iana_value, 0);
         EXPECT_NULL(server_conn->handshake_params.our_chain_and_key);
 
         EXPECT_SUCCESS(s2n_connection_free(client_conn));
         EXPECT_SUCCESS(s2n_connection_free(server_conn));
     };
 
-    /* Test that curve selection will be NIST P-256 when tls12 client does not sending curve extension. */
+    /* Test that curve selection will be NIST P-256 when tls12 client does not send curve extension.
+     *
+     *= https://tools.ietf.org/rfc/rfc4492#section-4
+     *= type=test
+     *# A client that proposes ECC cipher suites may choose not to include these extensions.
+     *# In this case, the server is free to choose any one of the elliptic curves or point formats listed in Section 5.
+     */
     {
         S2N_BLOB_FROM_HEX(tls12_client_hello_no_curves,
                 /* clang-format off */

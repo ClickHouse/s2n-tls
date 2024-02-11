@@ -16,12 +16,14 @@
 #include <strings.h>
 #include <time.h>
 
+#include "api/unstable/npn.h"
 #include "crypto/s2n_certificate.h"
 #include "crypto/s2n_fips.h"
 #include "crypto/s2n_hkdf.h"
 #include "error/s2n_errno.h"
 #include "tls/s2n_cipher_preferences.h"
 #include "tls/s2n_internal.h"
+#include "tls/s2n_ktls.h"
 #include "tls/s2n_security_policies.h"
 #include "tls/s2n_tls13.h"
 #include "utils/s2n_blob.h"
@@ -84,7 +86,6 @@ static int s2n_config_setup_fips(struct s2n_config *config)
 
 static int s2n_config_init(struct s2n_config *config)
 {
-    config->status_request_type = S2N_STATUS_REQUEST_NONE;
     config->wall_clock = wall_clock;
     config->monotonic_clock = monotonic_clock;
     config->ct_type = S2N_CT_SUPPORT_NONE;
@@ -113,7 +114,6 @@ static int s2n_config_init(struct s2n_config *config)
     POSIX_GUARD_RESULT(s2n_map_complete(config->domain_name_to_cert_map));
 
     s2n_x509_trust_store_init_empty(&config->trust_store);
-    POSIX_GUARD(s2n_x509_trust_store_from_system_defaults(&config->trust_store));
 
     return 0;
 }
@@ -218,7 +218,7 @@ struct s2n_config *s2n_fetch_default_config(void)
 
 int s2n_config_set_unsafe_for_testing(struct s2n_config *config)
 {
-    S2N_ERROR_IF(!S2N_IN_TEST, S2N_ERR_NOT_IN_UNIT_TEST);
+    POSIX_ENSURE(s2n_in_test(), S2N_ERR_NOT_IN_TEST);
     config->client_cert_auth_type = S2N_CERT_AUTH_NONE;
     config->check_ocsp = 0;
     config->disable_x509_validation = 1;
@@ -232,15 +232,18 @@ int s2n_config_defaults_init(void)
     if (s2n_is_in_fips_mode()) {
         POSIX_GUARD(s2n_config_init(&s2n_default_fips_config));
         POSIX_GUARD(s2n_config_setup_fips(&s2n_default_fips_config));
+        POSIX_GUARD(s2n_config_load_system_certs(&s2n_default_fips_config));
     } else {
         /* Set up default */
         POSIX_GUARD(s2n_config_init(&s2n_default_config));
         POSIX_GUARD(s2n_config_setup_default(&s2n_default_config));
+        POSIX_GUARD(s2n_config_load_system_certs(&s2n_default_config));
     }
 
     /* Set up TLS 1.3 defaults */
     POSIX_GUARD(s2n_config_init(&s2n_default_tls13_config));
     POSIX_GUARD(s2n_config_setup_tls13(&s2n_default_tls13_config));
+    POSIX_GUARD(s2n_config_load_system_certs(&s2n_default_tls13_config));
 
     return S2N_SUCCESS;
 }
@@ -252,7 +255,29 @@ void s2n_wipe_static_configs(void)
     s2n_config_cleanup(&s2n_default_tls13_config);
 }
 
-struct s2n_config *s2n_config_new(void)
+int s2n_config_load_system_certs(struct s2n_config *config)
+{
+    POSIX_ENSURE_REF(config);
+
+    struct s2n_x509_trust_store *store = &config->trust_store;
+    POSIX_ENSURE(!store->loaded_system_certs, S2N_ERR_X509_TRUST_STORE);
+
+    if (!store->trust_store) {
+        store->trust_store = X509_STORE_new();
+        POSIX_ENSURE_REF(store->trust_store);
+    }
+
+    int err_code = X509_STORE_set_default_paths(store->trust_store);
+    if (!err_code) {
+        s2n_x509_trust_store_wipe(store);
+        POSIX_BAIL(S2N_ERR_X509_TRUST_STORE);
+    }
+    store->loaded_system_certs = true;
+
+    return S2N_SUCCESS;
+}
+
+struct s2n_config *s2n_config_new_minimal(void)
 {
     struct s2n_blob allocator = { 0 };
     struct s2n_config *new_config;
@@ -265,6 +290,17 @@ struct s2n_config *s2n_config_new(void)
         s2n_free(&allocator);
         return NULL;
     }
+
+    return new_config;
+}
+
+struct s2n_config *s2n_config_new(void)
+{
+    struct s2n_config *new_config = s2n_config_new_minimal();
+    PTR_ENSURE_REF(new_config);
+
+    /* For backwards compatibility, s2n_config_new loads system certs by default. */
+    PTR_GUARD_POSIX(s2n_config_load_system_certs(new_config));
 
     return new_config;
 }
@@ -402,7 +438,7 @@ int s2n_config_set_alert_behavior(struct s2n_config *config, s2n_alert_behavior 
 int s2n_config_set_verify_host_callback(struct s2n_config *config, s2n_verify_host_fn verify_host_fn, void *data)
 {
     POSIX_ENSURE_REF(config);
-    config->verify_host = verify_host_fn;
+    config->verify_host_fn = verify_host_fn;
     config->data_for_verify_host = data;
     return 0;
 }
@@ -413,6 +449,13 @@ int s2n_config_set_check_stapled_ocsp_response(struct s2n_config *config, uint8_
     S2N_ERROR_IF(check_ocsp && !s2n_x509_ocsp_stapling_supported(), S2N_ERR_OCSP_NOT_SUPPORTED);
     config->check_ocsp = check_ocsp;
     return 0;
+}
+
+int s2n_config_disable_x509_time_verification(struct s2n_config *config)
+{
+    POSIX_ENSURE_REF(config);
+    config->disable_x509_time_validation = true;
+    return S2N_SUCCESS;
 }
 
 int s2n_config_disable_x509_verification(struct s2n_config *config)
@@ -438,7 +481,12 @@ int s2n_config_set_status_request_type(struct s2n_config *config, s2n_status_req
     S2N_ERROR_IF(type == S2N_STATUS_REQUEST_OCSP && !s2n_x509_ocsp_stapling_supported(), S2N_ERR_OCSP_NOT_SUPPORTED);
 
     POSIX_ENSURE_REF(config);
-    config->status_request_type = type;
+    config->ocsp_status_requested_by_user = (type == S2N_STATUS_REQUEST_OCSP);
+
+    /* Reset the ocsp_status_requested_by_s2n flag if OCSP status requests were disabled. */
+    if (type == S2N_STATUS_REQUEST_NONE) {
+        config->ocsp_status_requested_by_s2n = false;
+    }
 
     return 0;
 }
@@ -468,7 +516,7 @@ int s2n_config_set_verification_ca_location(struct s2n_config *config, const cha
     int err_code = s2n_x509_trust_store_from_ca_file(&config->trust_store, ca_pem_filename, ca_dir);
 
     if (!err_code) {
-        config->status_request_type = s2n_x509_ocsp_stapling_supported() ? S2N_STATUS_REQUEST_OCSP : S2N_STATUS_REQUEST_NONE;
+        config->ocsp_status_requested_by_s2n = s2n_x509_ocsp_stapling_supported() ? S2N_STATUS_REQUEST_OCSP : S2N_STATUS_REQUEST_NONE;
     }
 
     return err_code;
@@ -478,11 +526,15 @@ static int s2n_config_add_cert_chain_and_key_impl(struct s2n_config *config, str
 {
     POSIX_ENSURE_REF(config->domain_name_to_cert_map);
     POSIX_ENSURE_REF(cert_key_pair);
+
     s2n_pkey_type cert_type = s2n_cert_chain_and_key_get_pkey_type(cert_key_pair);
     config->is_rsa_cert_configured |= (cert_type == S2N_PKEY_TYPE_RSA);
+
     POSIX_GUARD(s2n_config_build_domain_name_to_cert_map(config, cert_key_pair));
 
     if (!config->default_certs_are_explicit) {
+        POSIX_ENSURE(cert_type >= 0, S2N_ERR_CERT_TYPE_UNSUPPORTED);
+        POSIX_ENSURE(cert_type < S2N_CERT_TYPE_COUNT, S2N_ERR_CERT_TYPE_UNSUPPORTED);
         /* Attempt to auto set default based on ordering. ie: first RSA cert is the default, first ECDSA cert is the
          * default, etc. */
         if (config->default_certs_by_type.certs[cert_type] == NULL) {
@@ -514,6 +566,25 @@ int s2n_config_add_cert_chain_and_key(struct s2n_config *config, const char *cer
             s2n_cert_chain_and_key_ptr_free);
     POSIX_ENSURE_REF(chain_and_key);
     POSIX_GUARD(s2n_cert_chain_and_key_load_pem(chain_and_key, cert_chain_pem, private_key_pem));
+    POSIX_GUARD(s2n_config_add_cert_chain_and_key_impl(config, chain_and_key));
+    config->cert_ownership = S2N_LIB_OWNED;
+
+    ZERO_TO_DISABLE_DEFER_CLEANUP(chain_and_key);
+    return S2N_SUCCESS;
+}
+
+/* Only used in the Rust bindings. Superseded by s2n_config_add_cert_chain_and_key_to_store */
+int s2n_config_add_cert_chain(struct s2n_config *config,
+        uint8_t *cert_chain_pem, uint32_t cert_chain_pem_size)
+{
+    POSIX_ENSURE_REF(config);
+    POSIX_ENSURE(config->cert_ownership != S2N_APP_OWNED, S2N_ERR_CERT_OWNERSHIP);
+
+    DEFER_CLEANUP(struct s2n_cert_chain_and_key *chain_and_key = s2n_cert_chain_and_key_new(),
+            s2n_cert_chain_and_key_ptr_free);
+    POSIX_ENSURE_REF(chain_and_key);
+    POSIX_GUARD(s2n_cert_chain_and_key_load_public_pem_bytes(chain_and_key,
+            cert_chain_pem, cert_chain_pem_size));
     POSIX_GUARD(s2n_config_add_cert_chain_and_key_impl(config, chain_and_key));
     config->cert_ownership = S2N_LIB_OWNED;
 
@@ -574,7 +645,7 @@ int s2n_config_set_cert_chain_and_key_defaults(struct s2n_config *config,
 
     /* Validate certs being set before clearing auto-chosen defaults or previously set defaults */
     struct certs_by_type new_defaults = { { 0 } };
-    for (uint32_t i = 0; i < num_cert_key_pairs; i++) {
+    for (size_t i = 0; i < num_cert_key_pairs; i++) {
         POSIX_ENSURE_REF(cert_key_pairs[i]);
         s2n_pkey_type cert_type = s2n_cert_chain_and_key_get_pkey_type(cert_key_pairs[i]);
         S2N_ERROR_IF(new_defaults.certs[cert_type] != NULL, S2N_ERR_MULTIPLE_DEFAULT_CERTIFICATES_PER_AUTH_TYPE);
@@ -582,7 +653,7 @@ int s2n_config_set_cert_chain_and_key_defaults(struct s2n_config *config,
     }
 
     POSIX_GUARD(s2n_config_clear_default_certificates(config));
-    for (uint32_t i = 0; i < num_cert_key_pairs; i++) {
+    for (size_t i = 0; i < num_cert_key_pairs; i++) {
         s2n_pkey_type cert_type = s2n_cert_chain_and_key_get_pkey_type(cert_key_pairs[i]);
         config->is_rsa_cert_configured |= (cert_type == S2N_PKEY_TYPE_RSA);
         config->default_certs_by_type.certs[cert_type] = cert_key_pairs[i];
@@ -985,20 +1056,6 @@ int s2n_config_get_ctx(struct s2n_config *config, void **ctx)
     return S2N_SUCCESS;
 }
 
-/*
- * Set the client_hello callback behavior to polling.
- *
- * Polling means that the callback function can be called multiple times.
- */
-int s2n_config_client_hello_cb_enable_poll(struct s2n_config *config)
-{
-    POSIX_ENSURE_REF(config);
-
-    config->client_hello_cb_enable_poll = 1;
-
-    return S2N_SUCCESS;
-}
-
 int s2n_config_set_send_buffer_size(struct s2n_config *config, uint32_t size)
 {
     POSIX_ENSURE_REF(config);
@@ -1068,6 +1125,16 @@ int s2n_config_set_recv_multi_record(struct s2n_config *config, bool enabled)
     POSIX_ENSURE_REF(config);
 
     config->recv_multi_record = enabled;
+
+    return S2N_SUCCESS;
+}
+
+int s2n_config_set_cert_validation_cb(struct s2n_config *config, s2n_cert_validation_callback cb, void *ctx)
+{
+    POSIX_ENSURE_REF(config);
+
+    config->cert_validation_cb = cb;
+    config->cert_validation_ctx = ctx;
 
     return S2N_SUCCESS;
 }

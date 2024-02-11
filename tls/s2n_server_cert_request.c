@@ -69,7 +69,7 @@ static int s2n_recv_client_cert_preferences(struct s2n_stuffer *in, s2n_cert_typ
     POSIX_ENSURE_REF(their_cert_type_pref_list);
 
     /* Iterate through our preference list from most to least preferred, and return the first match that we find. */
-    for (int our_cert_pref_idx = 0; our_cert_pref_idx < sizeof(s2n_cert_type_preference_list); our_cert_pref_idx++) {
+    for (size_t our_cert_pref_idx = 0; our_cert_pref_idx < sizeof(s2n_cert_type_preference_list); our_cert_pref_idx++) {
         for (int their_cert_idx = 0; their_cert_idx < cert_types_len; their_cert_idx++) {
             if (their_cert_type_pref_list[their_cert_idx] == s2n_cert_type_preference_list[our_cert_pref_idx]) {
                 *chosen_cert_type_out = s2n_cert_type_preference_list[our_cert_pref_idx];
@@ -172,7 +172,7 @@ int s2n_cert_req_send(struct s2n_connection *conn)
     }
 
     if (conn->actual_protocol_version == S2N_TLS12) {
-        POSIX_GUARD(s2n_send_supported_sig_scheme_list(conn, out));
+        POSIX_GUARD_RESULT(s2n_signature_algorithms_supported_list_send(conn, out));
     }
 
     /* RFC 5246 7.4.4 - If the certificate_authorities list is empty, then the

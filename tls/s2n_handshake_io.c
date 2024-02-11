@@ -1046,12 +1046,16 @@ int s2n_conn_set_handshake_type(struct s2n_connection *conn)
 
     if (conn->config->use_tickets) {
         if (conn->session_ticket_status == S2N_DECRYPT_TICKET) {
+            /* We reuse the session if a valid TLS12 ticket is provided.
+             * Otherwise, we will perform a full handshake and then generate
+             * a new session ticket. */
             if (s2n_decrypt_session_ticket(conn, &conn->client_ticket_to_decrypt) == S2N_SUCCESS) {
                 return S2N_SUCCESS;
             }
 
             POSIX_GUARD_RESULT(s2n_validate_ems_status(conn));
 
+            /* Set up the handshake to send a session ticket since a valid ticket was not provided */
             if (s2n_config_is_encrypt_decrypt_key_available(conn->config) == 1) {
                 conn->session_ticket_status = S2N_NEW_TICKET;
                 POSIX_GUARD_RESULT(s2n_handshake_type_set_tls12_flag(conn, WITH_SESSION_TICKET));
@@ -1618,10 +1622,7 @@ int s2n_negotiate_impl(struct s2n_connection *conn, s2n_blocked_status *blocked)
         /* Flush any pending I/O or alert messages */
         POSIX_GUARD(s2n_flush(conn, blocked));
 
-        /* If the connection is closed, the handshake will never complete. */
-        if (conn->closed) {
-            POSIX_BAIL(S2N_ERR_CLOSED);
-        }
+        POSIX_ENSURE(s2n_connection_check_io_status(conn, S2N_IO_FULL_DUPLEX), S2N_ERR_CLOSED);
 
         /* If the handshake was paused, retry the current message */
         if (conn->handshake.paused) {
@@ -1638,7 +1639,7 @@ int s2n_negotiate_impl(struct s2n_connection *conn, s2n_blocked_status *blocked)
                     /* Non-retryable write error. The peer might have sent an alert. Try and read it. */
                     const int write_errno = errno;
                     const int write_s2n_errno = s2n_errno;
-                    const char *write_s2n_debug_str = s2n_debug_str;
+                    struct s2n_debug_info write_s2n_debug_info = _s2n_debug_info;
 
                     if (s2n_handshake_read_io(conn) < 0 && s2n_errno == S2N_ERR_ALERT) {
                         /* s2n_handshake_read_io has set s2n_errno */
@@ -1647,7 +1648,7 @@ int s2n_negotiate_impl(struct s2n_connection *conn, s2n_blocked_status *blocked)
                         /* Let the write error take precedence if we didn't read an alert. */
                         errno = write_errno;
                         s2n_errno = write_s2n_errno;
-                        s2n_debug_str = write_s2n_debug_str;
+                        _s2n_debug_info = write_s2n_debug_info;
                         S2N_ERROR_PRESERVE_ERRNO();
                     }
                 }

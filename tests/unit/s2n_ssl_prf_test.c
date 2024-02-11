@@ -43,7 +43,8 @@ int main(int argc, char **argv)
     struct s2n_stuffer server_random_in = { 0 };
     struct s2n_stuffer premaster_secret_in = { 0 };
     struct s2n_stuffer master_secret_hex_out = { 0 };
-    struct s2n_blob master_secret = { .data = master_secret_hex_pad, .size = sizeof(master_secret_hex_pad) };
+    struct s2n_blob master_secret = { 0 };
+    EXPECT_SUCCESS(s2n_blob_init(&master_secret, master_secret_hex_pad, sizeof(master_secret_hex_pad)));
     struct s2n_blob pms = { 0 };
 
     struct s2n_connection *conn = NULL;
@@ -68,7 +69,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < 48; i++) {
         uint8_t c = 0;
         EXPECT_SUCCESS(s2n_stuffer_read_uint8_hex(&premaster_secret_in, &c));
-        conn->secrets.tls12.rsa_premaster_secret[i] = c;
+        conn->secrets.version.tls12.rsa_premaster_secret[i] = c;
     }
     for (int i = 0; i < 32; i++) {
         uint8_t c = 0;
@@ -83,13 +84,13 @@ int main(int argc, char **argv)
 
     /* Set the protocol version to sslv3 */
     conn->actual_protocol_version = S2N_SSLv3;
-    pms.data = conn->secrets.tls12.rsa_premaster_secret;
-    pms.size = sizeof(conn->secrets.tls12.rsa_premaster_secret);
+    pms.data = conn->secrets.version.tls12.rsa_premaster_secret;
+    pms.size = sizeof(conn->secrets.version.tls12.rsa_premaster_secret);
     EXPECT_SUCCESS(s2n_tls_prf_master_secret(conn, &pms));
 
     /* Convert the master secret to hex */
     for (int i = 0; i < 48; i++) {
-        EXPECT_SUCCESS(s2n_stuffer_write_uint8_hex(&master_secret_hex_out, conn->secrets.tls12.master_secret[i]));
+        EXPECT_SUCCESS(s2n_stuffer_write_uint8_hex(&master_secret_hex_out, conn->secrets.version.tls12.master_secret[i]));
     }
 
     EXPECT_EQUAL(memcmp(master_secret_hex_pad, master_secret_hex_in, sizeof(master_secret_hex_pad)), 0);

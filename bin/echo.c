@@ -14,6 +14,7 @@
  */
 
 #include <errno.h>
+#include <inttypes.h>
 #include <netdb.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
@@ -24,6 +25,7 @@
 #include <unistd.h>
 
 #include "api/s2n.h"
+#include "api/unstable/fingerprint.h"
 #include "api/unstable/renegotiate.h"
 #include "common.h"
 #include "crypto/s2n_pkey.h"
@@ -211,7 +213,7 @@ int print_connection_info(struct s2n_connection *conn)
         uint8_t *identity = (uint8_t *) malloc(identity_length);
         GUARD_EXIT_NULL(identity);
         GUARD_EXIT(s2n_connection_get_negotiated_psk_identity(conn, identity, identity_length), "Error getting negotiated psk identity from the connection\n");
-        printf("Negotiated PSK identity: %s\n", identity);
+        printf("Negotiated PSK identity: %.*s\n", identity_length, identity);
         free(identity);
     }
 
@@ -235,6 +237,23 @@ int print_connection_info(struct s2n_connection *conn)
     GUARD_EXIT_NULL(status_str);
     printf("Early Data status: %s\n", status_str);
 
+    struct s2n_client_hello *ch = s2n_connection_get_client_hello(conn);
+    if (ch && client_hello_version > S2N_SSLv2) {
+        uint8_t ja3[16] = { 0 };
+        uint32_t ja3_size = 0, str_size = 0;
+        GUARD_EXIT(s2n_client_hello_get_fingerprint_hash(ch, S2N_FINGERPRINT_JA3,
+                           sizeof(ja3), ja3, &ja3_size, &str_size),
+                "Error calculating JA3");
+        printf("JA3: ");
+        for (size_t i = 0; i < ja3_size; i++) {
+            printf("%02x", ja3[i]);
+        }
+        printf("\n");
+    }
+
+    printf("Wire bytes in: %" PRIu64 "\n", s2n_connection_get_wire_bytes_in(conn));
+    printf("Wire bytes out: %" PRIu64 "\n", s2n_connection_get_wire_bytes_out(conn));
+
     return 0;
 }
 
@@ -246,8 +265,10 @@ int negotiate(struct s2n_connection *conn, int fd)
             fprintf(stderr, "Failed to negotiate: '%s'. %s\n",
                     s2n_strerror(s2n_errno, "EN"),
                     s2n_strerror_debug(s2n_errno, "EN"));
-            fprintf(stderr, "Alert: %d\n",
-                    s2n_connection_get_alert(conn));
+            if (s2n_error_get_type(s2n_errno) == S2N_ERR_T_ALERT) {
+                fprintf(stderr, "Alert: %d\n",
+                        s2n_connection_get_alert(conn));
+            }
             S2N_ERROR_PRESERVE_ERRNO();
         }
 
@@ -360,12 +381,17 @@ int echo(struct s2n_connection *conn, int sockfd, bool *stop_echo)
                     return 0;
                 }
                 if (bytes_read < 0) {
-                    if (s2n_error_get_type(s2n_errno) == S2N_ERR_T_BLOCKED) {
-                        /* Wait until poll tells us data is ready */
-                        continue;
+                    switch (s2n_error_get_type(s2n_errno)) {
+                        case S2N_ERR_T_BLOCKED:
+                            /* Wait until poll tells us data is ready */
+                            continue;
+                        case S2N_ERR_T_ALERT:
+                            fprintf(stderr, "Received alert: %d\n", s2n_connection_get_alert(conn));
+                            break;
+                        default:
+                            fprintf(stderr, "Error reading from connection: '%s'\n", s2n_strerror(s2n_errno, "EN"));
+                            break;
                     }
-
-                    fprintf(stderr, "Error reading from connection: '%s' %d\n", s2n_strerror(s2n_errno, "EN"), s2n_connection_get_alert(conn));
                     exit(1);
                 }
 

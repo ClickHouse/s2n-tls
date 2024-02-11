@@ -47,6 +47,9 @@ struct s2n_connection;
  */
 struct s2n_x509_trust_store {
     X509_STORE *trust_store;
+
+    /* Indicates whether system default certs have been loaded into the trust store */
+    unsigned loaded_system_certs : 1;
 };
 
 /**
@@ -63,6 +66,11 @@ struct s2n_x509_validator {
     struct s2n_array *crl_lookup_list;
 };
 
+struct s2n_cert_validation_info {
+    unsigned finished : 1;
+    unsigned accepted : 1;
+};
+
 /** Some libcrypto implementations do not support OCSP validation. Returns 1 if supported, 0 otherwise. */
 uint8_t s2n_x509_ocsp_stapling_supported(void);
 
@@ -71,9 +79,6 @@ void s2n_x509_trust_store_init_empty(struct s2n_x509_trust_store *store);
 
 /** Returns TRUE if the trust store has certificates installed, FALSE otherwise */
 uint8_t s2n_x509_trust_store_has_certs(struct s2n_x509_trust_store *store);
-
-/** Initializes the trust store to default system paths **/
-int s2n_x509_trust_store_from_system_defaults(struct s2n_x509_trust_store *store);
 
 /** Initialize trust store from a PEM. This will allocate memory, and load PEM into the Trust Store **/
 int s2n_x509_trust_store_add_pem(struct s2n_x509_trust_store *store, const char *pem);

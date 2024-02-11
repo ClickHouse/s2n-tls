@@ -36,13 +36,12 @@ RSA *s2n_unsafe_rsa_get_non_const(const struct s2n_rsa_key *rsa_key)
 {
     PTR_ENSURE_REF(rsa_key);
 
-    /* pragma gcc diagnostic was added in gcc 4.6 */
-#if defined(__clang__) || S2N_GCC_VERSION_AT_LEAST(4, 6, 0)
+#ifdef S2N_DIAGNOSTICS_PUSH_SUPPORTED
     #pragma GCC diagnostic push
     #pragma GCC diagnostic ignored "-Wcast-qual"
 #endif
     RSA *out_rsa_key = (RSA *) rsa_key->rsa;
-#if defined(__clang__) || S2N_GCC_VERSION_AT_LEAST(4, 6, 0)
+#ifdef S2N_DIAGNOSTICS_POP_SUPPORTED
     #pragma GCC diagnostic pop
 #endif
 
@@ -121,7 +120,7 @@ static int s2n_rsa_encrypt(const struct s2n_pkey *pub, struct s2n_blob *in, stru
     /* Safety: RSA_public_encrypt does not mutate the key */
     int r = RSA_public_encrypt(in->size, (unsigned char *) in->data, (unsigned char *) out->data,
             s2n_unsafe_rsa_get_non_const(pub_key), RSA_PKCS1_PADDING);
-    S2N_ERROR_IF(r != out->size, S2N_ERR_SIZE_MISMATCH);
+    POSIX_ENSURE((int64_t) r == (int64_t) out->size, S2N_ERR_SIZE_MISMATCH);
 
     return 0;
 }
@@ -143,7 +142,7 @@ static int s2n_rsa_decrypt(const struct s2n_pkey *priv, struct s2n_blob *in, str
     /* Safety: RSA_private_decrypt does not mutate the key */
     int r = RSA_private_decrypt(in->size, (unsigned char *) in->data, intermediate,
             s2n_unsafe_rsa_get_non_const(priv_key), RSA_NO_PADDING);
-    S2N_ERROR_IF(r != expected_size, S2N_ERR_SIZE_MISMATCH);
+    POSIX_ENSURE((int64_t) r == (int64_t) expected_size, S2N_ERR_SIZE_MISMATCH);
 
     s2n_constant_time_pkcs1_unpad_or_dont(out->data, intermediate, r, out->size);
 

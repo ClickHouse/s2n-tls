@@ -1,71 +1,14 @@
 # Using s2n-tls
 
-s2n-tls is a C library, and is built using Make. To clone the latest
-copy of s2n-tls from git use:
+## Building s2n-tls
 
-```shell
-git clone https://github.com/aws/s2n-tls.git
-cd s2n-tls
-```
+See the [s2n-tls build documentation](BUILD.md) for guidance on building s2n-tls for your platform.
 
-## Building s2n-tls with existing libcrypto
-### make Instructions
-To build s2n-tls with an existing libcrypto installation, store its root folder in the
-`LIBCRYPTO_ROOT` environment variable.
-```shell
-# /usr/local/ssl/lib should contain libcrypto.a
-LIBCRYPTO_ROOT=/usr/local/ssl make
-```
-### CMake Instructions
+## Consuming s2n-tls via. CMake
 
-Throughout this document, there are instructions for setting a `LIBCRYPTO_ROOT` environment variable, or setting install prefixes to `s2n/lib-crypto-root`. If you
-are using CMake that step is unnecessary. Just follow the instructions here to use any build of libcrypto.
-
-(Required): You need at least CMake version 3.0 to fully benefit from Modern CMake. See [this](https://www.youtube.com/watch?v=bsXLMQ6WgIk) for more information.
-
-(Optional): Set the CMake variable `CMAKE_PREFIX_PATH` to the location libcrypto is installed to. If you do not,
-the default installation on your machine will be used.
-
-(Optional): Set the CMake variable `BUILD_SHARED_LIBS=ON` to build shared libraries. The default is static.
-
-We recommend an out-of-source build. Suppose you have a directory `s2n` which contains the s2n-tls source code. At the same level
-we can create a directory called `s2n-build`
-
-For example, we can build and install shared libs using ninja as our build system, and the system libcrypto implementation.
-
-````shell
-mkdir s2n-build
-cd s2n-build
-cmake ../s2n-tls -DBUILD_SHARED_LIBS=ON -GNinja
-ninja
-ninja test
-sudo ninja install
-````
-
-For another example, we can prepare an Xcode project using static libs using a libcrypto implementation in the directory `$HOME/s2n-user/builds/libcrypto-impl`.
-
-````shell
-mkdir s2n-build
-cd s2n-build
-cmake ../s2n-tls -DCMAKE_INSTALL_PREFIX=$HOME/s2n-user/builds/libcrypto-impl -G "Xcode"
-# now open the project in Xcode and build from there, or use the Xcode CLI
-````
-
-Or, for unix style vanilla builds:
-
-````shell
-mkdir s2n-build
-cd s2n-build
-cmake ../s2n-build
-make
-make test
-sudo make install
-````
-
-### Consuming s2n-tls via. CMake
 s2n-tls ships with modern CMake finder scripts if CMake is used for the build. To take advantage of this from your CMake script, all you need to do to compile and link against s2n-tls in your project is:
 
-````shell
+````bash
 find_package(s2n)
 
 ....
@@ -76,157 +19,6 @@ target_link_libraries(yourExecutableOrLibrary AWS::s2n)
 And when invoking CMake for your project, do one of two things:
  1. Set the `CMAKE_INSTALL_PREFIX` variable with the path to your s2n-tls build.
  2. If you have globally installed s2n-tls, do nothing, it will automatically be found.
-
-## Building s2n-tls with Openssl
-
-We keep the build artifacts in the *-build directory:
-```shell
-cd libcrypto-build
-```
-
-### Download the desired Openssl version:
-Openssl 3.0.5
-```shell
-curl -L -o openssl.tar.gz https://github.com/openssl/openssl/archive/refs/tags/openssl-3.0.5.tar.gz
-tar -xzvf openssl-3.0.5.tar.gz
-cd `tar ztf openssl-3.0.5.tar.gz | head -n1 | cut -f1 -d/`
-```
-
-OpenSSL-1.1.1
-```shell
-curl -LO https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1.tar.gz
-tar -xzvf OpenSSL_1_1_1.tar.gz
-cd `tar ztf OpenSSL_1_1_1.tar.gz | head -n1 | cut -f1 -d/`
-```
-
-OpenSSL-1.0.2
-```shell
-curl -LO https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_0_2.tar.gz
-tar -xzvf OpenSSL_1_0_2.tar.gz
-cd `tar ztf OpenSSL_1_0_2.tar.gz | head -n1 | cut -f1 -d/`
-```
-
-### Build Openssl
-The following config command disables numerous Openssl features and algorithms which are not used
-by s2n-tls. A minimal feature-set can help prevent exposure to security vulnerabilities.
-
-OpenSSL-1.1.1 and OpenSSL-3.0.5
-```shell
-./config -fPIC no-shared              \
-        no-md2 no-rc5 no-rfc3779 no-sctp no-ssl-trace no-zlib     \
-        no-hw no-mdc2 no-seed no-idea enable-ec_nistp_64_gcc_128 no-camellia\
-        no-bf no-ripemd no-dsa no-ssl2 no-ssl3 no-capieng                  \
-        -DSSL_FORBID_ENULL -DOPENSSL_NO_DTLS1 -DOPENSSL_NO_HEARTBEATS      \
-        --prefix=`pwd`/../../libcrypto-root/
-
-make
-make install
-```
-
-OpenSSL-1.0.2. Mac Users should replace "./config" with "./Configure darwin64-x86_64-cc".
-```shell
-./config -fPIC no-shared              \
-        no-libunbound no-gmp no-jpake no-krb5 no-store    \
-        no-md2 no-rc5 no-rfc3779 no-sctp no-ssl-trace no-zlib     \
-        no-hw no-mdc2 no-seed no-idea enable-ec_nistp_64_gcc_128 no-camellia\
-        no-bf no-ripemd no-dsa no-ssl2 no-ssl3 no-capieng                  \
-        -DSSL_FORBID_ENULL -DOPENSSL_NO_DTLS1 -DOPENSSL_NO_HEARTBEATS      \
-        --prefix=`pwd`/../../libcrypto-root/
-
-make depend
-make
-make install
-```
-
-OpenSSL-1.1.1 32-bit
-```shell
-setarch i386 ./config -fPIC no-shared     \
-        -m32 no-md2 no-rc5 no-rfc3779 no-sctp no-ssl-trace no-zlib     \
-        no-hw no-mdc2 no-seed no-idea no-camellia\
-        no-bf no-ripemd no-dsa no-ssl2 no-ssl3 no-capieng     \
-        -DSSL_FORBID_ENULL -DOPENSSL_NO_DTLS1 -DOPENSSL_NO_HEARTBEATS   \
-        --prefix=`pwd`/../../libcrypto-root/
-```
-
-### Build s2n-tls
-```shell
-cd ../../ # root of project
-make
-```
-
-## Building s2n-tls with LibreSSL
-
-To build s2n-tls with LibreSSL, do the following:
-
-```shell
-# We keep the build artifacts in the *-build directory
-cd libcrypto-build
-
-# Download the latest version of LibreSSL
-curl -O http://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-x.y.z.tar.gz
-tar -xzvf libressl-x.y.z.tar.gz
-
-# Build LibreSSL's libcrypto
-cd libressl-x.y.z
-./configure --prefix=`pwd`/../../libcrypto-root/
-make CFLAGS=-fPIC install
-
-# Build s2n-tls
-cd ../../
-make
-```
-
-once built, static and dynamic libraries for s2n-tls will be available in the lib/
-directory.
-
-## Building s2n-tls with BoringSSL
-
-To build s2n-tls with BoringSSL, you must check out a copy of the BoringSSL
-directly via git. This procedure has been tested with
-fb68d6c901b98ffe15b8890d00bc819bf44c5f01 of BoringSSL.
-
-```shell
-# We keep the build artifacts in the *-build directory
-cd libcrypto-build
-
-# Clone BoringSSL
-git clone https://boringssl.googlesource.com/boringssl
-
-# Build BoringSSL
-cd boringssl
-mkdir build
-cd build
-cmake -DCMAKE_C_FLAGS="-fPIC" ../
-make
-
-# Copy the built library and includes
-mkdir ../../../libcrypto-root/lib/
-cp crypto/libcrypto.a ../../../libcrypto-root/lib/
-cp -r ../include/ ../../../libcrypto-root/include
-
-# Build s2n-tls
-cd ../../../
-make
-```
-
-once built, static and dynamic libraries for s2n-tls will be available in the lib/
-directory.
-
-## mlock() and system limits
-
-Internally s2n-tls uses mlock() to prevent memory from being swapped to disk. The
-s2n-tls build tests may fail in some environments where the default limit on locked
-memory is too low. To check this limit, run:
-
-```shell
-ulimit -l
-```
-
-to raise the limit, consult the documentation for your platform.
-
-### Disabling mlock()
-To disable s2n-tls's mlock behavior, run your application with the `S2N_DONT_MLOCK` environment variable set.
-s2n-tls also reads this for unit tests. Try `S2N_DONT_MLOCK=1 make` if you're having mlock failures during unit tests.
 
 # s2n-tls API
 
@@ -321,7 +113,7 @@ if (s2n_negotiate(conn, &blocked) < 0) {
 
 Blinding is a mitigation against timing side-channels which in some cases can leak information about encrypted data. By default s2n-tls will cause a thread to sleep between 10 and 30 seconds whenever tampering is detected.
 
-Setting the `S2N_SELF_SERVICE_BLINDING` option with `s2n_connection_set_blinding()` turns off this behavior. This is useful for applications that are handling many connections in a single thread. In that case, if `s2n_recv()` or `s2n_negotiate()` return an error, self-service applications must call `s2n_connection_get_delay()` and pause activity on the connection  for the specified number of nanoseconds before calling `close()` or `shutdown()`. `s2n_shutdown()` will fail if called before the blinding delay elapses.
+Setting the `S2N_SELF_SERVICE_BLINDING` option with `s2n_connection_set_blinding()` turns off this behavior. This is useful for applications that are handling many connections in a single thread. In that case, if `s2n_recv()` or `s2n_negotiate()` return an error, self-service applications must call `s2n_connection_get_delay()` and pause activity on the connection for the specified number of nanoseconds before calling `close()` or `shutdown()`. `s2n_shutdown()` will fail if called before the blinding delay elapses.
 
 ### Stacktraces
 s2n-tls has an mechanism to capture stacktraces when errors occur.
@@ -335,7 +127,7 @@ Call `s2n_print_stacktrace()` to print your stacktrace.
 
 ## Initialization and Teardown
 
-The s2n-tls library must be initialized with `s2n_init()` before calling most library functions. `s2n_init()` MUST NOT be called more than once, even when an application uses multiple threads or processes. To clean up, `s2n_cleanup()` must be called from every thread or process created after `s2n_init()` was called.
+The s2n-tls library must be initialized with `s2n_init()` before calling most library functions. `s2n_init()` MUST NOT be called more than once, even when an application uses multiple threads or processes. s2n attempts to clean up its thread-local memory at thread-exit and all other memory at process-exit. However, this may not work if you are using a thread library other than pthreads. In that case you should call `s2n_cleanup()` from every thread or process created after `s2n_init()`.
 
 Initialization can be modified by calling `s2n_crypto_disable_init()` or `s2n_disable_atexit()` before `s2n_init()`.
 
@@ -372,7 +164,14 @@ s2n-tls provides multiple different methods to get the TLS protocol version of t
 
 ## Config
 
-`s2n_config` objects are used to change the default settings of a s2n-tls connection. Use `s2n_config_new()` to create a new config object. To associate a config with a connection call `s2n_connection_set_config()`. It is not necessary to create a config object per connection; one config object should be used for many connections. Call `s2n_config_free()` to free the object when no longer needed. _Only_ free the config object when all connections using it are finished using it. Most commonly, a `s2n_config` object is used to set the certificate key pair for authentication and change the default security policy. See the sections for [certificates](#certificates-and-authentication) and [security policies](#security-policies) for more information on those settings.
+`s2n_config` objects are used to change the default settings of a s2n-tls connection. Use `s2n_config_new()` to create a new config object. To associate a config with a connection call `s2n_connection_set_config()`. A config should not be altered once it is associated with a connection as this will produce undefined behavior. It is not necessary to create a config object per connection; one config object should be used for many connections. Call `s2n_config_free()` to free the object when no longer needed. _Only_ free the config object when all connections using it have been freed.
+
+Calling `s2n_config_new()` can have a performance cost during config creation due to loading
+default system certificates into the trust store (see [Configuring the Trust Store](#configuring-the-trust-store)).
+For increased performance, use `s2n_config_new_minimal()` when system certificates are not needed
+for certificate validation.
+
+Most commonly, a `s2n_config` object is used to set the certificate key pair for authentication and change the default security policy. See the sections for [certificates](#certificates-and-authentication) and [security policies](#security-policies) for more information on those settings.
 
 ### Overriding the Config
 
@@ -384,44 +183,46 @@ s2n-tls uses pre-made security policies to help avoid common misconfiguration mi
 
 `s2n_config_set_cipher_preferences()` sets a security policy, which includes the cipher/kem/signature/ecc preferences and protocol version.
 
-### Chart: Security Policy Version To Protocol Version And Ciphersuites 
+### Chart: Security Policy Version To Protocol Version And Ciphersuites
 
 The following chart maps the security policy version to protocol version and ciphersuites supported.
 
-|           version                            | SSLv3 | TLS1.0 | TLS1.1 | TLS1.2 | TLS1.3  | AES-CBC | ChaCha20-Poly1305 | ECDSA | AES-GCM | 3DES | RC4 | DHE | ECDHE | ChaCha20-Boosted |
-|----------------------------------------------|-------|--------|--------|--------|---------|---------|-------------------|-------|---------|------|-----|-----|-------|------------------|
-|          "default"                           |       |   X    |    X   |    X   |         |    X    |          X        |       |    X    |      |     |     |   X   |                  |
-|          "20190214"                          |       |   X    |    X   |    X   |         |    X    |                   |   X   |    X    |  X   |     |  X  |   X   |                  |
-|          "20170718"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |      |     |     |   X   |                  |
-|          "20170405"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |  X   |     |     |   X   |                  |
-|          "20170328"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |  X   |     |  X  |   X   |                  |
-|          "20170210"                          |       |   X    |    X   |    X   |         |    X    |          X        |       |    X    |      |     |     |   X   |                  |
-|          "20160824"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |      |     |     |   X   |                  |
-|          "20160804"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |  X   |     |     |   X   |                  |
-|          "20160411"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |  X   |     |     |   X   |                  |
-|          "20150306"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |  X   |     |     |   X   |                  |
-|          "20150214"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |  X   |     |  X  |       |                  |
-|          "20150202"                          |       |   X    |    X   |    X   |         |    X    |                   |       |         |  X   |     |  X  |       |                  |
-|          "20141001"                          |       |   X    |    X   |    X   |         |    X    |                   |       |         |  X   |  X  |  X  |       |                  |
-|          "20140601"                          |   X   |   X    |    X   |    X   |         |    X    |                   |       |         |  X   |  X  |  X  |       |                  |
-|          "20190120"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |  X   |     |     |   X   |                  |
-|          "20190121"                          |       |   X    |    X   |    X   |         |    X    |                   |       |    X    |  X   |     |     |   X   |                  |
-|          "20190122"                          |       |   X    |    X   |    X   |         |    X    |                   |   X   |    X    |  X   |     |  X  |   X   |                  |
-|        "default_tls13"                       |       |   X    |    X   |    X   |    X    |    X    |          X        |   X   |    X    |      |     |     |   X   |                  |
-|          "20190801"                          |       |   X    |    X   |    X   |    X    |    X    |          X        |       |    X    |      |     |     |   X   |                  |
-|          "20190802"                          |       |   X    |    X   |    X   |    X    |    X    |          X        |       |    X    |      |     |     |   X   |                  |
-|          "20200207"                          |       |   X    |    X   |    X   |    X    |    X    |          X        |       |    X    |      |     |     |       |                  |
-|          "rfc9151"                           |       |        |        |    X   |    X    |         |                   |   X   |    X    |      |     |  X  |   X   |                  |
-|  "CloudFront-TLS-1-2-2021"                   |       |        |        |    X   |    X    |         |          X        |   X   |    X    |      |     |     |   X   |                  |
-|  "CloudFront-TLS-1-2-2021-ChaCha20-Boosted"  |       |        |        |    X   |    X    |         |          X        |   X   |    X    |      |     |     |   X   |        X         |
+|          version          | SSLv3 | TLS1.0 | TLS1.1 | TLS1.2 | TLS1.3  | AES-CBC | AES-GCM | ChaCha20-Poly1305 | 3DES | RC4 | DHE | ECDHE |
+|---------------------------|-------|--------|--------|--------|---------|---------|---------|-------------------|------|-----|-----|-------|
+|         "default"         |       |   X    |    X   |    X   |         |    X    |    X    |                   |      |     |     |   X   |
+|       "default_tls13"     |       |   X    |    X   |    X   |    X    |    X    |    X    |          X        |      |     |     |   X   |
+|       "default_fips"      |       |        |        |    X   |         |    X    |    X    |                   |      |     |  X  |   X   |
+|         "20190214"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |  X  |   X   |
+|         "20170718"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |      |     |     |   X   |
+|         "20170405"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |     |   X   |
+|         "20170328"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |  X  |   X   |
+|         "20170210"        |       |   X    |    X   |    X   |         |    X    |    X    |          X        |      |     |     |   X   |
+|         "20160824"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |      |     |     |   X   |
+|         "20160804"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |     |   X   |
+|         "20160411"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |     |   X   |
+|         "20150306"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |     |   X   |
+|         "20150214"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |  X  |       |
+|         "20150202"        |       |   X    |    X   |    X   |         |    X    |         |                   |  X   |     |  X  |       |
+|         "20141001"        |       |   X    |    X   |    X   |         |    X    |         |                   |  X   |  X  |  X  |       |
+|         "20140601"        |   X   |   X    |    X   |    X   |         |    X    |         |                   |  X   |  X  |  X  |       |
+|         "20190120"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |     |   X   |
+|         "20190121"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |     |   X   |
+|         "20190122"        |       |   X    |    X   |    X   |         |    X    |    X    |                   |  X   |     |  X  |   X   |
+|         "20190801"        |       |   X    |    X   |    X   |    X    |    X    |    X    |          X        |      |     |     |   X   |
+|         "20190802"        |       |   X    |    X   |    X   |    X    |    X    |    X    |          X        |      |     |     |   X   |
+|         "20200207"        |       |   X    |    X   |    X   |    X    |    X    |    X    |          X        |      |     |     |       |
+|         "20230317"        |       |        |        |    X   |    X    |    X    |    X    |                   |      |     |     |   X   |
+|         "rfc9151"         |       |        |        |    X   |    X    |         |    X    |                   |      |     |  X  |   X   |
+| "CloudFront-TLS-1-2-2021" |       |        |        |    X   |    X    |         |    X    |          X        |      |     |     |   X   |
 
-The "default" and "default_tls13" version is special in that it will be updated with future s2n-tls changes and ciphersuites and protocol versions may be added and removed, or their internal order of preference might change. Numbered versions are fixed and will never change.
+The "default", "default_tls13", and "default_fips" versions are special in that they will be updated with future s2n-tls changes and ciphersuites and protocol versions may be added and removed, or their internal order of preference might change. Numbered versions are fixed and will never change.
+In general, customers prefer to use numbered versions for production use cases to prevent impact from library updates.
+
+"20230317" is a FIPS compliant policy. It offers more limited but more secure options than "default". It only supports TLS1.2 and TLS1.3. Consider this policy if you plan to enable FIPS mode or don't need or want to support less secure legacy options like TLS1.1 or SHA1.
 
 "20160411" follows the same general preference order as "default". The main difference is it has a CBC cipher suite at the top. This is to accommodate certain Java clients that have poor GCM implementations. Users of s2n-tls who have found GCM to be hurting performance for their clients should consider this version.
 
-"20170405" is a FIPS compliant cipher suite preference list based on approved algorithms in the [FIPS 140-2 Annex A](http://csrc.nist.gov/publications/fips/fips140-2/fips1402annexa.pdf). Similarly to "20160411", this preference list has CBC cipher suites at the top to accommodate certain Java clients. Users of s2n-tls who plan to enable FIPS mode should consider this version.
-
-The "rfc9151" security policy is derived from [Commercial National Security Algorithm (CNSA) Suite Profile for TLS and DTLS 1.2 and 1.3](https://datatracker.ietf.org/doc/html/rfc9151).
+"rfc9151" is derived from [Commercial National Security Algorithm (CNSA) Suite Profile for TLS and DTLS 1.2 and 1.3](https://datatracker.ietf.org/doc/html/rfc9151). This policy restricts the algorithms allowed for signatures on certificates in the certificate chain to RSA or ECDSA with sha384, which may require you to update your certificates.
 
 s2n-tls does not expose an API to control the order of preference for each ciphersuite or protocol version. s2n-tls follows the following order:
 
@@ -434,13 +235,15 @@ s2n-tls does not expose an API to control the order of preference for each ciphe
 
 #### ChaCha20 Boosting
 
-s2n-tls usually prefers AES over ChaCha20. However, some clients-- particularly mobile or IOT devices-- do not support AES hardware acceleration, making AES less efficient and performant than ChaCha20. In this case, clients will indicate their preference for ChaCha20 by listing it first during cipher suite negotiation. Usually s2n-tls servers ignore client preferences, but s2n-tls offers "ChaCha20 boosted" security policies that will choose ChaCha20 over AES if the client indicates a preference for ChaCha20.
+s2n-tls usually prefers AES over ChaCha20. However, some clients-- particularly mobile or IOT devices-- do not support AES hardware acceleration, making AES less efficient and performant than ChaCha20. In this case, clients will indicate their preference for ChaCha20 by listing it first during cipher suite negotiation. Usually s2n-tls servers ignore client preferences, but s2n-tls offers "ChaCha20 boosted" security policies that will choose ChaCha20 over AES if the client indicates a preference for ChaCha20. This is available in the "CloudFront-TLS-1-2-2021-ChaCha20-Boosted" policy, which is identical to the "CloudFront-TLS-1-2-2021" policy listed above but with ChaCha20 Boosting enabled.
 
 ### Chart: Security Policy Version To Supported Signature Schemes
 
 |    version     |   RSA PKCS1  |   ECDSA  |  SHA-1 Legacy |  RSA PSS |
 |----------------|--------------|----------|---------------|----------|
 |   "default"    |      X       |     X    |      X        |          |
+| "default_tls13"|      X       |     X    |      X        |    X     |
+| "default_fips" |      X       |     X    |               |          |
 |   "20190214"   |      X       |     X    |      X        |          |
 |   "20170718"   |      X       |     X    |      X        |          |
 |   "20170405"   |      X       |     X    |      X        |          |
@@ -457,10 +260,10 @@ s2n-tls usually prefers AES over ChaCha20. However, some clients-- particularly 
 |   "20190120"   |      X       |     X    |      X        |          |
 |   "20190121"   |      X       |     X    |      X        |          |
 |   "20190122"   |      X       |     X    |      X        |          |
-| "default_tls13"|      X       |     X    |      X        |    X     |
 |   "20190801"   |      X       |     X    |      X        |    X     |
 |   "20190802"   |      X       |     X    |      X        |    X     |
 |   "20200207"   |      X       |     X    |      X        |    X     |
+|   "20230317"   |      X       |     X    |               |    X     |
 |   "rfc9151"    |      X       |     X    |               |    X     |
 
 Note that the default_tls13 security policy will never support legacy SHA-1 algorithms in TLS1.3, but will support
@@ -471,6 +274,8 @@ legacy SHA-1 algorithms in CertificateVerify messages if TLS1.2 has been negotia
 |    version     |   secp256r1  |  secp384r1 | x25519 |
 |----------------|--------------|------------|--------|
 |   "default"    |      X       |      X     |        |
+| "default_tls13"|      X       |      X     |   X    |
+| "default_fips" |      X       |      X     |        |
 |   "20190214"   |      X       |      X     |        |
 |   "20170718"   |      X       |      X     |        |
 |   "20170405"   |      X       |      X     |        |
@@ -487,11 +292,241 @@ legacy SHA-1 algorithms in CertificateVerify messages if TLS1.2 has been negotia
 |   "20190120"   |      X       |      X     |        |
 |   "20190121"   |      X       |      X     |        |
 |   "20190122"   |      X       |      X     |        |
-| "default_tls13"|      X       |      X     |   X    |
 |   "20190801"   |      X       |      X     |   X    |
 |   "20190802"   |      X       |      X     |        |
 |   "20200207"   |      X       |      X     |   X    |
 |   "rfc9151"    |              |      X     |        |
+
+## Sending and Receiving
+
+### Basic IO setup
+
+By default, s2n-tls sends and receives data using a provided file descriptor
+(usually a socket) and the read/write system calls. The file descriptor can be set with
+`s2n_connection_set_fd()`, or separate read and write file descriptors can be
+set with `s2n_connection_set_read_fd()` and `s2n_connection_set_write_fd()`.
+The provided file descriptor should be active and connected.
+
+In general the application is free to configure the file descriptor as preferred,
+including socket options. s2n-tls itself sets a few socket options:
+* If available, TCP_QUICKACK is used during the TLS handshake
+* If available and enabled via `s2n_connection_use_corked_io()`, TCP_CORK is
+used during the TLS handshake. TCP_NOPUSH or TCP_NODELAY may be used if TCP_CORK
+is not available.
+
+**Important Note:**
+If the read end of the pipe is closed unexpectedly, writing to the pipe will raise
+a SIGPIPE signal. **s2n-tls does NOT handle SIGPIPE.** A SIGPIPE signal will cause
+the process to terminate unless it is handled or ignored by the application.
+See the [signal man page](https://linux.die.net/man/2/signal) for instructions on
+how to handle C signals, or simply ignore the SIGPIPE signal by calling
+`signal(SIGPIPE, SIG_IGN)` before calling any s2n-tls IO methods.
+
+### Blocking or Non-Blocking?
+
+s2n-tls supports both blocking and non-blocking I/O.
+* In blocking mode, each s2n-tls I/O function will not return until it has completed
+the requested IO operation.
+* In non-blocking mode, s2n-tls I/O functions will immediately return, even if the socket couldn't
+send or receive all the requested data. In this case, the I/O function will return `S2N_FAILURE`,
+and `s2n_error_get_type()` will return `S2N_ERR_T_BLOCKED`. The I/O operation will have to be
+called again in order to send or receive the remaining requested data.
+
+Some s2n-tls I/O functions take a `blocked` argument. If an I/O function returns an
+`S2N_ERR_T_BLOCKED` error, the `blocked` argument will be set to a `s2n_blocked_status` value,
+indicating what s2n-tls is currently blocked on. Note that unless an I/O function returns
+`S2N_FAILURE` with an `S2N_ERR_T_BLOCKED` error, the `blocked` argument is meaningless, and should
+not be used in any application logic.
+
+Servers in particular usually prefer non-blocking mode. In blocking mode, a single connection
+blocks the thread while waiting for more IO. In non-blocking mode, multiple connections
+can make progress by returning control while waiting for more IO using methods like
+[`poll`](https://linux.die.net/man/2/poll) or [`select`](https://linux.die.net/man/2/select).
+
+To use s2n-tls in non-blocking mode, set the underlying file descriptors as non-blocking.
+For example:
+```c
+int flags = fcntl(fd, F_GETFL, 0);
+if (flags < 0) return S2N_FAILURE;
+if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return S2N_FAILURE;
+```
+
+### Errors and Alerts
+
+If the peer sends an alert, the next call to a read IO method will report **S2N_FAILURE** and
+`s2n_error_get_type()` will return **S2N_ERR_T_ALERT**. The specific alert received
+is available by calling `s2n_connection_get_alert()`.
+
+In TLS1.3, all alerts are fatal. s2n-tls also treats all alerts as fatal in earlier
+versions of TLS by default. `s2n_config_set_alert_behavior()` can be called to
+force s2n-tls to treat pre-TLS1.3 warning alerts as not fatal, but that behavior
+is not recommended unless required for compatibility. In the past, attacks against
+TLS have involved manipulating the alert level to disguise fatal alerts as warnings.
+
+If s2n-tls encounters a fatal error, the next call to a write IO method will send
+a close_notify alert to the peer. Except for a few exceptions, s2n-tls does not
+send specific alerts in order to avoid leaking information that could be used for
+a sidechannel attack. To ensure that the alert is sent, `s2n_shutdown()` should
+be called after an error.
+
+### Performing the TLS Handshake
+
+Before application data can be sent or received, an application must perform a handshake
+to establish a TLS connection with the peer.
+
+To perform the handshake, call `s2n_negotiate()` until it either returns **S2N_SUCCESS**
+or returns **S2N_FAILURE** without a **S2N_ERR_T_BLOCKED** error.
+
+For an example of how to perform a basic handshake, see [examples/s2n_negotiate.c](https://github.com/aws/s2n-tls/blob/main/docs/examples/s2n_negotiate.c)
+
+### Application Data
+
+After the TLS handshake, an application can send and receive encrypted data.
+
+Although most s2n-tls APIs are not thread-safe, `s2n_send()` and `s2n_recv()`
+may be called simultaneously from two different threads. This means that an
+application may have one thread calling `s2n_send()` and one thread calling `s2n_recv()`,
+but NOT multiple threads calling `s2n_recv()` or multiple threads calling `s2n_send()`.
+
+Even if an application only intends to send data or only intends to receive data,
+it should implement both send and receive in order to handle alerts and post-handshake
+TLS control messages like session tickets.
+
+#### Sending Application Data
+
+`s2n_send()` and its variants encrypt and send application data to the peer.
+The sending methods return the number of bytes written and may indicate a partial
+write. Partial writes are possible not just for non-blocking I/O, but also for
+connections aborted while active.
+
+A single call to `s2n_send()` may involve multiple system calls to write the
+provided application data. s2n-tls breaks the application data into fixed-sized
+records before encryption, and calls write for each record.
+[See the record size documentation for how record size may impact performance](https://github.com/aws/s2n-tls/blob/main/docs/USAGE-GUIDE.md#record-sizes).
+
+In non-blocking mode, `s2n_send()` will send data from the provided buffer and return the number of
+bytes sent, as long as the socket was able to send at least 1 byte. If no bytes could be sent on the
+socket, `s2n_send()` will return `S2N_FAILURE`, and `s2n_error_get_type()` will return
+`S2N_ERR_T_BLOCKED`. To ensure that all the provided data gets sent, applications should continue
+calling `s2n_send()` until the return values across all calls have added up to the length of the
+data, or until `s2n_send()` returns an `S2N_ERR_T_BLOCKED` error. After an `S2N_ERR_T_BLOCKED`
+error is returned, applications should call `s2n_send()` again only after the socket is
+able to send more data. This can be determined by using methods like
+[`poll`](https://linux.die.net/man/2/poll) or [`select`](https://linux.die.net/man/2/select).
+
+Unlike OpenSSL, repeated calls to `s2n_send()` should not duplicate the original
+parameters, but should update the inputs per the indication of size written.
+
+`s2n_sendv_with_offset()` behaves like `s2n_send()`, but supports vectorized buffers.
+The offset input should be updated between calls to reflect the data already written.
+
+`s2n_sendv()` also supports vectorized buffers, but assumes an offset of 0.
+Because of this assumption, a caller would have to make sure that the input vectors
+are updated to account for a partial write. Therefore `s2n_sendv_with_offset()`
+is preferred.
+
+For examples of how to send `data` of length `data_size` with `s2n_send()`
+or `s2n_sendv_with_offset()`, see [examples/s2n_send.c](https://github.com/aws/s2n-tls/blob/main/docs/examples/s2n_send.c)
+
+#### Receiving Application Data
+
+`s2n_recv()` reads and decrypts application data from the peer, copying it into
+the application-provided output buffer. It returns the number of bytes read, and
+may indicate a partial read even if blocking IO is used.
+It returns "0" to indicate that the peer has shutdown the connection.
+
+By default, `s2n_recv()` will return after reading a single TLS record. `s2n_recv()` can be called
+repeatedly to read multiple records. To allow `s2n_recv()` to read multiple records with a single
+call, use `s2n_config_set_recv_multi_record()`.
+
+In non-blocking mode, `s2n_recv()` will read data into the provided buffer and return the number of
+bytes read, as long as at least 1 byte was read from the socket. If no bytes could be read from the
+socket, `s2n_recv()` will return `S2N_FAILURE`, and `s2n_error_get_type()` will return
+`S2N_ERR_T_BLOCKED`. To ensure that all data on the socket is properly received, applications
+should continue calling `s2n_recv()` until it returns an `S2N_ERR_T_BLOCKED` error. After an
+`S2N_ERR_T_BLOCKED` error is returned, applications should call `s2n_recv()` again only after the
+socket has received more data. This can be determined by using methods like
+[`poll`](https://linux.die.net/man/2/poll) or [`select`](https://linux.die.net/man/2/select).
+
+Unlike OpenSSL, repeated calls to `s2n_recv()` should not duplicate the original parameters,
+but should update the inputs per the indication of size read.
+
+For an example of how to read all the data sent by the peer into one buffer,
+see `s2n_example_recv()` in [examples/s2n_recv.c](https://github.com/aws/s2n-tls/blob/main/docs/examples/s2n_recv.c)
+
+For an example of how to echo any data sent by the peer,
+see `s2n_example_recv_echo()` in [examples/s2n_recv.c](https://github.com/aws/s2n-tls/blob/main/docs/examples/s2n_recv.c)
+
+`s2n_peek()` can be used to check if more application data may be returned
+from `s2n_recv()` without performing another read from the file descriptor.
+This is useful when using `select()` on the underlying s2n-tls file descriptor, because
+a call to `s2n_recv()` may read more data into s2n-tls's internal buffer than
+was requested or can fit into the application-provided output buffer. This extra
+application data will be returned by the next call to `s2n_recv()`, but `select()`
+will be unable to tell the application that there is more data available and that
+`s2n_recv()` should be called again. An application can solve this problem by
+calling `s2n_peek()` to determine if `s2n_recv()` needs to be called again.
+
+### Closing the Connection
+
+`s2n_shutdown()` attempts a graceful closure at the TLS layer. It does not close the
+underlying transport. The call may block on either reading or writing.
+
+`s2n_shutdown()` should be called after an error in order to ensure that s2n-tls
+sends an alert to notify the peer of the failure.
+
+`s2n_shutdown()` will discard any application data received from the peer. This
+can lead to data truncation, so `s2n_shutdown_send()` may be preferred for TLS1.3
+connections where the peer continues sending after the application initiates
+shutdown. See [Closing the connection for writes](#closing-the-connection-for-writes)
+below.
+
+Because `s2n_shutdown()` attempts a graceful shutdown, it will not return success
+unless a close_notify alert is successfully both sent and received. As a result,
+`s2n_shutdown()` may fail when interacting with a non-conformant TLS implementation
+or if called on a connection in a bad state.
+
+Once `s2n_shutdown()` is complete:
+* The s2n_connection handle cannot be used for reading or writing.
+* The underlying transport can be closed, most likely via `shutdown()` or `close()`.
+* The s2n_connection handle can be freed via `s2n_connection_free()` or reused
+via `s2n_connection_wipe()`
+
+#### Closing the connection for writes
+
+TLS1.3 supports closing the write side of a TLS connection while leaving the read
+side unaffected. This indicates "end-of-data" to the peer without preventing
+future reads. This feature is usually referred to as "half-close".
+
+s2n-tls offers the `s2n_shutdown_send()` method to close the write side of
+a connection. Unlike `s2n_shutdown()`, it does not wait for the peer to respond
+with a close_notify alert and does not discard any incoming application data. An
+application can continue to call `s2n_recv()` after a call to `s2n_shutdown_send()`.
+
+`s2n_shutdown_send()` may still be called for earlier TLS versions, but most
+TLS implementations will react by immediately discarding any pending writes and
+closing the connection.
+
+If `s2n_shutdown_send()` is used, the application should still call `s2n_shutdown()`
+or wait for `s2n_recv()` to return 0 to indicate end-of-data before cleaning up
+the connection or closing the read side of the underlying transport.
+
+### Custom IO Callbacks
+
+By default, s2n-tls sends and receives data using a provided file descriptor
+(usually a socket) and the read/write system calls. To change this default behavior,
+an application can implement custom send and receive methods using `s2n_connection_set_recv_cb()`
+and `s2n_connection_set_send_cb()`.
+The application can pass inputs (such as a file descriptor or destination buffer)
+to the custom IO methods by using `s2n_connection_set_recv_ctx()` and `s2n_connection_set_send_ctx()`.
+s2n-tls will call the custom IO methods with the custom context instead of calling
+the default implementation.
+
+The custom IO methods may send or receive less than the requested length. They
+should return the number of bytes sent/received, or set errno and return an error code < 0.
+s2n-tls will interpret errno set to EWOULDBLOCK or EAGAIN as indicating a retriable
+blocking error, and set **s2n_errno** and the s2n_blocked_status appropriately.
+s2n-tls will interpret a return value of 0 as a closed connection.
 
 ## Certificates and Authentication
 
@@ -501,9 +536,26 @@ Authentication is usually the most expensive part of the handshake. To avoid the
 
 ### Configuring the Trust Store
 
-To validate the peer’s certificate, the local “trust store” must contain a certificate that can authenticate the peer’s certificate.
+To validate the peer’s certificate, a config's local “trust store” must contain a certificate
+that can authenticate the peer’s certificate. To add certificates to the trust store, call
+`s2n_config_set_verification_ca_location()` or `s2n_config_add_pem_to_trust_store()`.
 
-By default, s2n-tls will be initialized with the common trust store locations for the host operating system. To completely override those locations, call `s2n_config_wipe_trust_store()`. To add certificates to the trust store, call `s2n_config_set_verification_ca_location()` or `s2n_config_add_pem_to_trust_store()`.
+`s2n_config_new()` initializes the trust store with the default system certificates, which may
+include public CAs or other unexpected certificates. If s2n-tls is verifying certificates and does
+not require these default system certificates, they should be cleared with
+`s2n_config_wipe_trust_store()` before calling `s2n_config_set_verification_ca_location()` or
+`s2n_config_add_pem_to_trust_store()`.
+
+Note that the `s2n_verify_host_fn` callback must be implemented to validate the identity of all
+received certificates. A client implementation is set by default. If the identity of the received
+certificates are implicit (i.e. the certificates are self-signed, or signed by a privately owned
+CA), the `s2n_verify_host_fn` callback need not perform any additional validation. However,
+`s2n_config_wipe_trust_store()` should be called before adding certificates to the trust store in
+this case, in order to avoid implicitly trusting the identity of peers that may present
+certificates trusted via an unexpected default system certificate.
+
+Configs created with `s2n_config_new_minimal()` are initialized with empty trust stores. To add
+default system certificates to these configs, call `s2n_config_load_system_certs()`.
 
 ### Server Authentication
 
@@ -520,6 +572,15 @@ Client authentication is not enabled by default. However, the server can require
 Client authentication can be configured by calling `s2n_config_set_client_auth_type()` or `s2n_connection_set_client_auth_type()` for both the client and server. Additionally, the client will need to load a certificate and key pair as described for the server in [Server Authentication](#server-authentication) and the server will need to configure its trust store as described in [Configuring the Trust Store](#configuring-the-trust-store).
 
 When using client authentication, the server MUST implement the `s2n_verify_host_fn`, because the default behavior will likely reject all client certificates.
+
+When using client authentication with TLS1.3, `s2n_negotiate` will report a successful
+handshake to clients before the server validates the client certificate. If the server then
+rejects the client certificate, the client may later receive an alert while calling `s2n_recv`,
+potentially after already having sent application data with `s2n_send`. This is a quirk of the
+TLS1.3 protocol message ordering: the server does not send any more handshake messages
+after the client sends the client certificate (see the [TLS1.3 state machine](https://www.rfc-editor.org/rfc/rfc8446.html#appendix-A.2)).
+There is no security risk, since the client has already authenticated the server,
+but it could make handshake failures and authentication errors more difficult to handle.
 
 ### Certificate Inspection
 
@@ -541,7 +602,7 @@ Online Certificate Status Protocol (OCSP) is a protocol to establish whether or 
 
 OCSP stapling can be applied to both client and server certificates when using TLS1.3, but only to server certificates when using TLS1.2.
 
-To use OCSP stapling, both server and client must call `s2n_config_set_status_request_type()` with S2N_STATUS_REQUEST_OCSP. The server (or client, if using client authentication) will also need to call `s2n_cert_chain_and_key_set_ocsp_data()` to set the raw bytes of the OCSP stapling data.
+To use OCSP stapling, the requester must call `s2n_config_set_status_request_type()` with S2N_STATUS_REQUEST_OCSP. The responder will need to call `s2n_cert_chain_and_key_set_ocsp_data()` to set the raw bytes of the OCSP stapling data.
 
 The OCSP stapling information will be automatically validated if the underlying libcrypto supports OCSP validation. `s2n_config_set_check_stapled_ocsp_response()` can be called with "0" to turn this off. Call `s2n_connection_get_ocsp_response()` to retrieve the received OCSP stapling information for manual verification.
 
@@ -551,7 +612,7 @@ The OCSP stapling information will be automatically validated if the underlying 
 
 Certificate Revocation Lists (CRLs) are lists of issued, unexpired certificates that have been revoked by the CA. CAs publish updated versions of these lists periodically. A validator wishing to verify a certificate obtains a CRL from the CA, validates the CRL, and checks to ensure the certificate is not contained in the list, and therefore has not been revoked by the CA.
 
-The s2n CRL lookup callback must be implemented and set via `s2n_config_set_crl_lookup_cb()` to enable CRL validation in s2n-tls. This callback will be triggered once for each certificate in the certificate chain. 
+The s2n CRL lookup callback must be implemented and set via `s2n_config_set_crl_lookup_cb()` to enable CRL validation in s2n-tls. This callback will be triggered once for each certificate in the certificate chain.
 
 The CRLs for all certificates received in the handshake must be obtained in advance of the CRL lookup callback, outside of s2n-tls. It is not possible in s2n-tls to obtain CRLs in real-time. Applications should load these CRLs into memory, by creating `s2n_crl`s via `s2n_crl_new()`, and adding the obtained CRL data via `s2n_crl_load_pem()`. The `s2n_crl` should be freed via `s2n_crl_free()` when no longer needed.
 
@@ -607,66 +668,58 @@ In TLS1.3, session ticket messages are sent after the handshake as "post-handsha
 
 Additionally, in TLS1.3, multiple session tickets may be issued for the same connection. Servers can call `s2n_config_set_initial_ticket_count()` to set the number of tickets they want to send and `s2n_connection_add_new_tickets_to_send()` to increase the number of tickets to send during a connection.
 
-### s2n\_config\_set\_client\_hello\_cb
+### Session Resumption Forward Secrecy
 
-```c
-int s2n_config_set_client_hello_cb(struct s2n_config *config, s2n_client_hello_fn client_hello_callback, void *ctx);
-```
+In TLS1.2, the secret stored inside the ticket is the original session's master secret. Because of this, TLS1.2 session tickets are not forward secret, meaning that compromising the resumed session's secret exposes the original session's encrypted data.
 
-**s2n_config_set_client_hello_cb** allows the caller to set a callback function
-that will be called after ClientHello was parsed.
+In contrast, in TLS1.3 the secret stored inside the ticket is _derived_ from the original session's master secret. The derivation uses a cryptographic operation that can't be reversed by an attacker to retrieve the original master secret. Therefore, TLS1.3 session tickets are forward secret, meaning compromising the resumed session's secret will not expose the original session's encrypted data.
 
-```c
-typedef int s2n_client_hello_fn(struct s2n_connection *conn, void *ctx);
-```
+### Keying Material Lifetimes in TLS1.2 and TLS1.3
 
-The callback function takes a s2n-tls connection as input, which receives the
-ClientHello and the context previously provided in **s2n_config_set_client_hello_cb**.
-The callback can access any ClientHello information from the connection and use
-the **s2n_connection_set_config** call to change the config of the connection.
+In TLS1.2, a full handshake can issue a session ticket encrypted with a specific session ticket encryption key. Connections that resume using that session ticket will not issue new session tickets. Therefore, the lifetime of the original "keying material"-- meaning the lifetime of any secret derived from the original full handshake-- is limited by the lifetime of the session ticket encryption key. Applications can set the session ticket encryption key lifetime with `s2n_config_set_ticket_encrypt_decrypt_key_lifetime()`.
 
-```c
-int s2n_config_set_client_hello_cb_mode(struct s2n_config *config, s2n_client_hello_cb_mode cb_mode);
-```
-Sets the callback execution mode.
+In TLS1.3, connections that resume using a session ticket CAN issue new session tickets. This is because TLS1.3 tickets are intended to be single-use, and each ticket contains a different secret: see [Session Resumption Forward Secrecy](#session-resumption-forward-secrecy). These new session tickets may be encrypted with newer session ticket encryption keys, allowing the original "keying material" to outlive the original session ticket encryption key. However, TLS1.3 enforces a specific separate "keying material" lifetime, which servers can configure with `s2n_connection_set_server_keying_material_lifetime()`. This effectively places a limit on how long sessions can be resumed before a new full handshake is required.
 
-The callback can be be invoked in two modes
-- **S2N_CLIENT_HELLO_CB_BLOCKING** (default):
+## Examining the Client Hello
 
-    In this mode s2n-tls expects the callback to complete its work
-    and return the appropriate response code before the handshake continues.
-    If any of the connection properties were changed based on the server_name
-    extension the callback must either return a value greater than 0 or invoke **s2n_connection_server_name_extension_used**,
-    otherwise the callback returns 0 to continue the handshake.
+s2n-tls stores the received Client Hello and makes it available to the application. Call `s2n_connection_get_client_hello()` to get a pointer to the `s2n_client_hello` struct storing the Client Hello message. A NULL value will be returned if the connection has not yet received the Client Hello. The earliest point in the handshake when this struct is available is during the [Client Hello Callback](#client-hello-callback). The stored Client Hello message will not be available after calling `s2n_connection_free_handshake()`.
 
-- **S2N_CLIENT_HELLO_CB_NONBLOCKING**:
+Call `s2n_client_hello_get_raw_message()` to retrieve the complete Client Hello message with the random bytes on it zeroed out.
 
-    In non-blocking mode, s2n-tls expects the callback to not complete its work. If the callback
-    returns a response code of 0 s2n-tls will return **S2N_FAILURE** with **S2N_ERR_T_BLOCKED**
-    error type and **s2n_blocked_status** set to **S2N_BLOCKED_ON_APPLICATION_INPUT**.
-    The handshake is paused and further calls to **s2n_negotiate** will continue to return the
-    same error until **s2n_client_hello_cb_done** is invoked for the **s2n_connection** to resume
-    the handshake. This allows s2n-tls clients to process client_hello without
-    blocking and then resume the handshake at a later time.
-    If any of the connection properties were changed on the basis of the server_name extension then
-    **s2n_connection_server_name_extension_used** must be invoked before marking the callback done.
+Call `s2n_client_hello_get_cipher_suites()` to retrieve the list of cipher suites sent by the client.
 
-The callback can return a negative value to make s2n-tls terminate the
-handshake early with a fatal handshake failure alert.
+Call `s2n_client_hello_get_session_id()` to retrieve the session ID sent by the client in the ClientHello message. Note that this value may not be the session ID eventually associated with this particular connection since the session ID can change when the server sends the Server Hello. The official session ID can be retrieved with `s2n_connection_get_session_id()`after the handshake completes.
 
-```c
-int s2n_client_hello_cb_done(struct s2n_connection *conn)
-```
-Marks the non-blocking callback as complete.
-Can be invoked from within the callback when operating in non-blocking mode
-to continue the handshake.
+Call `s2n_client_hello_get_extensions()` to retrieve the entire list of extensions sent in the Client Hello. Calling `s2n_client_hello_get_extension_by_id()` allows you to interrogate the `s2n_client_hello` struct for a specific extension.
 
-```c
-int s2n_client_server_name_used(struct s2n_connection *conn)
-```
-Indicates that connection properties were changed on the basis of server_name.
-Triggers a s2n-tls server to send the server_name extension. Must be called
-before s2n-tls finishes processing the ClientHello.
+### SSLv2
+s2n-tls will not negotiate SSLv2, but will accept SSLv2 ClientHellos advertising a
+higher protocol version like SSLv3 or TLS1.0. This was a backwards compatibility
+strategy used by some old clients when connecting to a server that might only support SSLv2.
+
+You can determine whether an SSLv2 ClientHello was received by checking the value
+of `s2n_connection_get_client_hello_version()`. If an SSLv2 ClientHello was
+received, then `s2n_connection_get_client_protocol_version()` will still report
+the real protocol version requested by the client.
+
+SSLv2 ClientHellos are formatted differently than ClientHellos in later versions.
+`s2n_client_hello_get_raw_message()` and `s2n_client_hello_get_cipher_suites()`
+will produce differently formatted data. See the documentation for those methods
+for details about proper SSLv2 ClientHello parsing.
+
+### Client Hello Callback
+
+Users can access the Client Hello during the handshake by setting the callback `s2n_config_set_client_hello_cb()`. A possible use-case for this is to modify the `s2n_connection` based on information in the Client Hello. This should be done carefully, as modifying the connection in response to untrusted input can be dangerous. In particular, switching from an `s2n_config` that supports TLS1.3 to one that does not opens the server up to a possible version downgrade attack.
+
+`s2n_connection_server_name_extension_used()` MUST be invoked before exiting the callback if any of the connection properties were changed on the basis of the Server Name extension. If desired, the callback can return a negative value to make s2n-tls terminate the handshake early with a fatal handshake failure alert.
+
+#### Callback Modes
+
+The callback can be invoked in two modes: **S2N_CLIENT_HELLO_CB_BLOCKING** or **S2N_CLIENT_HELLO_CB_NONBLOCKING**. Use `s2n_config_set_client_hello_cb_mode()` to set the desired mode.
+
+The default mode, "blocking mode", will wait for the Client Hello callback to succeed and then continue the handshake. Use this mode for light-weight callbacks that won't slow down the handshake or block the main thread, like logging or simple configuration changes.
+
+In contrast, "non-blocking mode" will wait for the ClientHello callback to succeed and then pause the handshake, immediately returning from s2n_negotiate with an error indicating that the handshake is blocked on application input. This allows the application to do expensive or time-consuming work like network calls outside of the callback without blocking the main thread. Only when the application calls `s2n_client_hello_cb_done()` will the handshake be able to resume.
 
 ## Record sizes
 
@@ -718,114 +771,6 @@ Dynamic record sizing doesn't completely override **s2n_connection_prefer_throug
 Once **resize_threshold** is hit, records return to the maximum size configured for the connection.
 And if the maximum fragment length negotiated with the peer is lower than what dynamic record sizing
 would normally produce, the lower value will be used.
-
-## Connection-oriented functions
-
-### s2n\_connection\_set\_fd
-
-```c
-int s2n_connection_set_fd(struct s2n_connection *conn,
-                          int readfd);
-int s2n_connection_set_read_fd(struct s2n_connection *conn,
-                               int readfd);
-int s2n_connection_set_write_fd(struct s2n_connection *conn,
-                                int writefd);
-```
-
-**s2n_connection_set_fd** sets the file-descriptor for an s2n-tls connection. This
-file-descriptor should be active and connected. s2n-tls also supports setting the
-read and write file-descriptors to different values (for pipes or other unusual
-types of I/O).
-
-**Important Note:**
-If the read end of the pipe is closed unexpectedly, writing to the pipe will raise
-a SIGPIPE signal. **s2n-tls does NOT handle SIGPIPE.** A SIGPIPE signal will cause
-the process to terminate unless it is handled or ignored by the application.
-
-### s2n\_connection\_get\_client\_hello
-
-```c
-struct s2n_client_hello *s2n_connection_get_client_hello(struct s2n_connection *conn);
-```
-For a given s2n_connection, **s2n_connection_get_client_hello** returns a handle
-to the s2n_client_hello structure holding the client hello message sent by the client during the handshake.
-NULL is returned if the connection has not yet received and parsed the client hello.
-Earliest point during the handshake when this structure is available for use is in the client_hello_callback (see **s2n_config_set_client_hello_cb**).
-
-### s2n\_client\_hello\_get\_raw\_message
-
-```c
-ssize_t s2n_client_hello_get_raw_message_length(struct s2n_client_hello *ch);
-ssize_t s2n_client_hello_get_raw_message(struct s2n_client_hello *ch, uint8_t *out, uint32_t max_length);
-```
-
-- **ch** The s2n_client_hello on the s2n_connection. The handle can be obtained using **s2n_connection_get_client_hello**.
-- **out** Pointer to a buffer into which the raw client hello bytes should be copied.
-- **max_length** Max number of bytes to copy into the **out** buffer.
-
-**s2n_client_hello_get_raw_message_length** returns the size of the ClientHello message received by the server; it can be used to allocate the **out** buffer.
-**s2n_client_hello_get_raw_message** copies **max_length** bytes of the ClientHello message into the **out** buffer and returns the number of copied bytes.
-The ClientHello instrumented using this function will have the Random bytes zero-ed out.
-
-For SSLv2 ClientHello messages, the raw message contains only the cipher_specs, session_id and members portions of the hello message
-(see [RFC5246](https://tools.ietf.org/html/rfc5246#appendix-E.2)). To access other members, you may use the
-**s2n_connection_get_client_hello_version**, **s2n_connection_get_client_protocol_version**  and **s2n_connection_get_session_id_length** accesor functions.
-
-### s2n\_client\_hello\_get\_cipher\_suites
-
-```c
-ssize_t s2n_client_hello_get_cipher_suites_length(struct s2n_client_hello *ch);
-ssize_t s2n_client_hello_get_cipher_suites(struct s2n_client_hello *ch, uint8_t *out, uint32_t max_length);
-```
-
-- **ch** The s2n_client_hello on the s2n_connection. The handle can be obtained using **s2n_connection_get_client_hello**.
-- **out** Pointer to a buffer into which the cipher_suites bytes should be copied.
-- **max_length** Max number of bytes to copy into the **out** buffer.
-
-**s2n_client_hello_get_cipher_suites_length** returns the number of bytes the cipher_suites takes on the ClientHello message received by the server; it can be used to allocate the **out** buffer.
-**s2n_client_hello_get_cipher_suites** copies into the **out** buffer **max_length** bytes of the cipher_suites on the ClientHello and returns the number of copied bytes.
-
-### s2n\_client\_hello\_get\_extensions
-
-```c
-ssize_t s2n_client_hello_get_extensions_length(struct s2n_client_hello *ch);
-ssize_t s2n_client_hello_get_extensions(struct s2n_client_hello *ch, uint8_t *out, uint32_t max_length);
-```
-
-- **ch** The s2n_client_hello on the s2n_connection. The handle can be obtained using **s2n_connection_get_client_hello**.
-- **out** Pointer to a buffer into which the cipher_suites bytes should be copied.
-- **max_length** Max number of bytes to copy into the **out** buffer.
-
-**s2n_client_hello_get_extensions_length** returns the number of bytes the extensions take on the ClientHello message received by the server; it can be used to allocate the **out** buffer.
-**s2n_client_hello_get_extensions** copies into the **out** buffer **max_length** bytes of the extensions on the ClientHello and returns the number of copied bytes.
-
-### s2n\_client\_hello\_get\_extension
-
-```c
-ssize_t s2n_client_hello_get_extension_length(struct s2n_client_hello *ch, s2n_tls_extension_type extension_type);
-ssize_t s2n_client_hello_get_extension_by_id(struct s2n_client_hello *ch, s2n_tls_extension_type extension_type, uint8_t *out, uint32_t max_length);
-```
-
-- **ch** The s2n_client_hello on the s2n_connection. The handle can be obtained using **s2n_connection_get_client_hello**.
-- **s2n_tls_extension_type** Enum [s2n_tls_extension_type](#s2n\_config\_set\_extension\_data) lists all supported extension types.
-- **out** Pointer to a buffer into which the extension bytes should be copied.
-- **max_length** Max number of bytes to copy into the **out** buffer.
-
-**s2n_client_hello_get_extension_length** returns the number of bytes the given extension type takes on the ClientHello message received by the server; it can be used to allocate the **out** buffer.
-**s2n_client_hello_get_extension_by_id** copies into the **out** buffer **max_length** bytes of a given extension type on the ClientHello and returns the number of copied bytes.
-
-### s2n\_client\_hello\_get\_session\_id
-
-```c
-int s2n_client_hello_get_session_id_length(struct s2n_client_hello *ch, uint32_t *out_length);
-int s2n_client_hello_get_session_id(struct s2n_client_hello *ch, uint8_t *out, uint32_t *out_length, uint32_t max_length);
-```
-
-These functions retrieve the session id as sent by the client in the ClientHello message. The session id on the **s2n_connection** may change later when the server sends the ServerHello; see **s2n_connection_get_session_id** for how to get the final session id used for future session resumption.
-
-**s2n_client_hello_get_session_id_length** stores the ClientHello session id length in bytes in **out_length**. The **ch** is a pointer to **s2n_client_hello** of the **s2n_connection** which can be obtained using **s2n_connection_get_client_hello**. The **out_length** can be used to allocate the **out** buffer for the **s2n_client_hello_get_session_id** call.
-
-**s2n_client_hello_get_session_id** copies up to **max_length** bytes of the ClientHello session_id into the **out** buffer and stores the number of copied bytes in **out_length**.
 
 ## Private Key Operation Related Calls
 
@@ -906,7 +851,7 @@ fails synchronously, simply return S2N_FAILURE from the callback. If the offload
 fails asynchronously, s2n-tls does not provide a way to communicate that result. Instead,
 simply shutdown and cleanup the connection as you would for any other error.
 
-## TLS1.3 Pre-Shared Key Related Calls
+## TLS1.3 Pre-Shared Keys
 
 s2n-tls supports pre-shared keys (PSKs) as of TLS1.3. PSKs allow users to establish secrets outside of the handshake, skipping certificate exchange and authentication.
 
@@ -921,63 +866,25 @@ A PSK must not be shared between more than one server and one client. An entity 
 
 ### Configuring External Pre-Shared Keys
 
-Use the following APIs to configure external pre-shared keys.
+Both clients and servers will need to create and append a PSK to a connection in order to negotiate that PSK. Call `s2n_external_psk_new()` to allocate memory for a PSK object. Call `s2n_psk_set_identity()` to set a unique identifier for the PSK. Note that this identity will be transmitted over the network unencrypted, so do not include any confidential information in it. Call `s2n_psk_set_secret()` to set the secret value for a given PSK. Deriving a shared secret from a password or other low-entropy source is _not_ secure and is subject to dictionary attacks. See [this RFC](https://www.rfc-editor.org/rfc/rfc9257.html#name-recommendations-for-externa) for more guidelines on creating a secure PSK secret. Call `s2n_psk_set_hmac()` to change the hmac algorithm (defaults to **S2N_PSK_HMAC_SHA256**) for a given PSK. Note that the hmac algorithm may influence server cipher-suite selection.
 
-```c
-struct s2n_psk* s2n_external_psk_new();
-int s2n_psk_free(struct s2n_psk **psk);
-int s2n_psk_set_identity(struct s2n_psk *psk, const uint8_t *identity, uint16_t identity_size);
-int s2n_psk_set_secret(struct s2n_psk *psk, const uint8_t *secret, uint16_t secret_size);
-int s2n_psk_set_hmac(struct s2n_psk *psk, s2n_psk_hmac hmac);
-int s2n_connection_append_psk(struct s2n_connection *conn, struct s2n_psk *psk);
-int s2n_config_set_psk_mode(struct s2n_config *config, s2n_psk_mode mode);
-int s2n_connection_set_psk_mode(struct s2n_connection *conn, s2n_psk_mode mode);
-```
+Call `s2n_connection_append_psk()` to append the newly created PSK to the connection. Both the server and client should call this API to add PSKs to their connection. PSKs that are appended first will be preferred over PSKs appended last unless custom PSK selection logic is implemented. Use `s2n_psk_free()` to free the memory allocated for a PSK once you have associated it with a connection.
 
-**s2n_external_psk_new** creates a new external PSK object with **S2N_PSK_HMAC_SHA256** as the default PSK hmac algorithm. Use **s2n_psk_free** to free the memory allocated to the external PSK object.
-
-**s2n_psk_set_identity** sets the identity for a given PSK. The identity is a unique identifier for the pre-shared secret. This identity is transmitted over the network unencrypted and is a non-secret value, therefore do not include any confidential information.
-
-**s2n_psk_set_secret** sets the secret value for a given PSK. Deriving a shared secret from a password or other low-entropy source is not secure and is subject to dictionary attacks.
-
-**s2n_psk_set_hmac** sets the PSK hmac algorithm for a given PSK. The supported PSK hmac algorithms are listed in the **s2n_psk_hmac** enum. This API overrides the default PSK hmac algorithm value of **S2N_PSK_HMAC_SHA256** and may influence the server cipher suite selection.
-
-**s2n_connection_append_psk** appends the PSK to the connection. Both server and client should call this API to add PSKs to their connection. The order this API is called matters, as PSKs that are appended first will be more preferred than PSKs appended last. This API must be called prior to the server selecting a PSK for the connection.
-
-**s2n_config_set_psk_mode** configures s2n-tls to expect either session resumption PSKs or external PSKs. This API should be called prior to selecting a PSK.
-
-**s2n_connection_set_psk_mode** overrides the PSK mode set on the config for this connection.
+External PSKs and Session Resumption cannot both be used in TLS13. Therefore, users must pick which mode they are using by calling `s2n_config_set_psk_mode()` prior to the handshake. Additionally, `s2n_connection_set_psk_mode()` overrides the PSK mode set on the config for a particular connection.
 
 ### Selecting a Pre-Shared Key
 
-By default, the server chooses the first identity in its PSK list that also appears in the client's PSK list. If you would like to implement your own PSK selection logic, use the **s2n_psk_selection_callback** to select the PSK to be used for the connection, along with the following offered PSK APIs to process the client sent list of PSKs.
+By default, a server chooses the first identity in its PSK list that also appears in the client's PSK list. The `s2n_psk_selection_callback` is available if you would like to implement your own PSK selection logic. Currently, this callback is not asynchronous. Call `s2n_config_set_psk_selection_callback()` to associate your `s2n_psk_selection_callback` with a config.
 
-```c
-typedef int (*s2n_psk_selection_callback)(struct s2n_connection *conn, void *context,
-                                          struct s2n_offered_psk_list *psk_list);
-int s2n_config_set_psk_selection_callback(struct s2n_config *config, s2n_psk_selection_callback cb, void *context);
-struct s2n_offered_psk* s2n_offered_psk_new();
-int s2n_offered_psk_free(struct s2n_offered_psk **psk);
-bool s2n_offered_psk_list_has_next(struct s2n_offered_psk_list *psk_list);
-int s2n_offered_psk_list_next(struct s2n_offered_psk_list *psk_list, struct s2n_offered_psk *psk);
-int s2n_offered_psk_list_reread(struct s2n_offered_psk_list *psk_list);
-int s2n_offered_psk_get_identity(struct s2n_offered_psk *psk, uint8_t** identity, uint16_t *size);
-int s2n_offered_psk_list_choose_psk(struct s2n_offered_psk_list *psk_list, struct s2n_offered_psk *psk);
-```
+The `s2n_psk_selection_callback` will provide the list of PSK identities sent by the client in the **psk_list** input parameter. You will need to create an offered PSK object by calling `s2n_offered_psk_new()` and pass this object as a parameter in `s2n_offered_psk_list_next()` in order to populate the offered PSK object. Call `s2n_offered_psk_list_has_next()` prior to calling `s2n_offered_psk_list_next()` to determine if there exists another PSK in the **psk_list**. Call `s2n_offered_psk_get_identity()` to get the identity of a particular **s2n_offered_psk**.
 
-**s2n_psk_selection_callback** is a callback function that the server calls to select a PSK from a list of offered PSKs. Implement this callback to use custom PSK selection logic. To examine the list of client PSK identities use the input **psk_list** along with the **s2n_offered_psk_list_next** and **s2n_offered_psk_get_identity** APIs. To choose a client PSK identity, call **s2n_offered_psk_list_choose_psk**. Before a client PSK identity is chosen, the server must have configured its corresponding PSK using **s2n_connection_append_psk**. Currently, this callback is not asynchronous.
+Call `s2n_offered_psk_list_choose_psk()` to choose a particular **s2n_offered_psk** to be used for the connection. Note that the server must have already configured the corresponding PSK on the connection using `s2n_connection_append_psk()`. To disable PSKs for the connection and perform a full handshake instead, set the PSK identity to NULL. Call `s2n_offered_psk_free()` once you have chosen a particular PSK to free the memory allocated.
 
-**s2n_config_set_psk_selection_callback** sets the **s2n_psk_selection_callback**. If it is not set, the s2n-tls server chooses the first identity in its PSK list that also appears in the client's PSK list.
+If desired, `s2n_offered_psk_list_reread()` returns the offered PSK list to its original read state. After `s2n_offered_psk_list_reread()` is called, the next call to `s2n_offered_psk_list_next()` will return the first PSK in the offered PSK list.
 
-**s2n_offered_psk_new** creates a new offered PSK object. Pass this object to **s2n_offered_psk_list_next** to retrieve the next PSK from the list.  Use **s2n_offered_psk_list_has_next** prior to this API call to ensure we have not reached the end of the list. **s2n_offered_psk_free** frees the memory associated with the **s2n_offered_psk** object.
+Use `s2n_connection_get_negotiated_psk_identity()` to retrieve the PSK identity selected by the server for the connection.
 
-**s2n_offered_psk_list_reread** returns the offered PSK list to its original read state. After **s2n_offered_psk_list_reread** is called, the next call to **s2n_offered_psk_list_next** will return the first PSK in the offered PSK list.
-
-**s2n_offered_psk_get_identity** gets the identity and identity length for a given offered PSK object.
-
-**s2n_offered_psk_list_choose_psk** sets the chosen offered PSK to be used for the connection. To disable PSKs for the connection and perform a full handshake instead, set the PSK identity to NULL.
-
-In the following example, **s2n_psk_selection_callback** chooses the first client offered PSK identity present in an external store.
+In the following example, `s2n_psk_selection_callback` chooses the first client offered PSK identity present in an external store.
 
 ```c
 int s2n_psk_selection_callback(struct s2n_connection *conn, void *context,
@@ -1003,193 +910,6 @@ int s2n_psk_selection_callback(struct s2n_connection *conn, void *context,
     return S2N_SUCCESS;
 }
 ```
-
-### Retrieve the Negotiated Pre-Shared Key
-
-The following APIs enable the caller to retrieve the PSK selected by the server for the connection.
-
-```c
-int s2n_connection_get_negotiated_psk_identity_length(struct s2n_connection *conn, uint16_t *identity_length);
-int s2n_connection_get_negotiated_psk_identity(struct s2n_connection *conn, uint8_t *identity, uint16_t max_identity_length);
-```
-
-**s2n_connection_get_negotiated_psk_identity** gets the identity of the PSK used to negotiate the connection. **s2n_connection_get_negotiated_psk_identity_length** gets the length of the identity. If the connection performed a full handshake instead of using PSKs then **s2n_connection_get_negotiated_psk_identity_length** returns 0 and **s2n_connection_get_negotiated_psk_identity** does nothing.
-
-## I/O functions
-
-s2n-tls supports both blocking and non-blocking I/O. To use s2n-tls in non-blocking
-mode, set the underlying file descriptors as non-blocking (i.e. with
-**fcntl**). In blocking mode, each s2n-tls I/O function will not return until it is
-complete. In non-blocking mode an s2n-tls I/O function may return while there is
-still I/O pending. In this case the value of the **blocked** parameter will be set
-to either **S2N_BLOCKED_ON_READ** or **S2N_BLOCKED_ON_WRITE**, depending on the
-direction in which s2n-tls is blocked.
-
-s2n-tls I/O functions should be called repeatedly until the **blocked** parameter is
-**S2N_NOT_BLOCKED**.
-
-If the read end of the pipe is closed unexpectedly, writing to the pipe will raise
-a SIGPIPE signal. **s2n-tls does NOT handle SIGPIPE.** A SIGPIPE signal will cause
-the process to terminate unless it is handled or ignored by the application.
-
-### s2n\_negotiate
-
-```c
-int s2n_negotiate(struct s2n_connection *conn, s2n_blocked_status *blocked);
-```
-
-**s2n_negotiate** performs the initial "handshake" phase of a TLS connection and must be called before any **s2n_recv** or **s2n_send** calls.
-
-### s2n\_send
-
-```c
-ssize_t s2n_send(struct s2n_connection *conn
-              void *buf,
-              ssize_t size,
-              s2n_blocked_status *blocked);
-```
-
-**s2n_send** writes and encrypts **size** of **buf** data to the associated connection. **s2n_send** will return the number of bytes written, and may indicate a partial write. Partial writes are possible not just for non-blocking I/O, but also for connections aborted while active. **NOTE:** Unlike OpenSSL, repeated calls to **s2n_send** should not duplicate the original parameters, but should update **buf** and **size** per the indication of size written. For example;
-
-```c
-s2n_blocked_status blocked;
-int written = 0;
-char data[10]; /* Some data we want to write */
-do {
-    int w = s2n_send(conn, data + written, 10 - written, &blocked);
-    if (w < 0) {
-        /* Some kind of error */
-        break;
-    }
-    written += w;
-} while (blocked != S2N_NOT_BLOCKED);
-```
-
-### s2n\_sendv\_with\_offset
-
-```c
-ssize_t s2n_sendv_with_offset(struct s2n_connection *conn
-              const struct iovec *bufs,
-              ssize_t count,
-              ssize_t offs,
-              s2n_blocked_status *blocked);
-```
-
-**s2n_sendv_with_offset** works in the same way as **s2n_send** except that it accepts vectorized buffers. **s2n_sendv_with_offset** will return the number of bytes written, and may indicate a partial write. Partial writes are possible not just for non-blocking I/O, but also for connections aborted while active. **NOTE:** Unlike OpenSSL, repeated calls to **s2n_sendv_with_offset** should not duplicate the original parameters, but should update **bufs** and **count** per the indication of size written. For example;
-
-```c
-s2n_blocked_status blocked;
-int written = 0;
-char data[10]; /* Some data we want to write */
-struct iovec iov[1];
-iov[0].iov_base = data;
-iov[0].iov_len = 10;
-do {
-    int w = s2n_sendv_with_offset(conn, iov, 1, written, &blocked);
-    if (w < 0) {
-        /* Some kind of error */
-        break;
-    }
-    written += w;
-} while (blocked != S2N_NOT_BLOCKED);
-```
-
-### s2n\_sendv
-
-```c
-ssize_t s2n_sendv(struct s2n_connection *conn
-              const struct iovec *bufs,
-              ssize_t count,
-              s2n_blocked_status *blocked);
-```
-
-**s2n_sendv** works in the same way as **s2n_sendv_with_offset** except that the latter's **offs** parameter is implicitly assumed to be 0. Therefore in the partial write case, the caller would have to make sure that **bufs** and **count** fields are modified in a way that takes the partial writes into account.
-
-### s2n\_recv
-
-```c
-ssize_t s2n_recv(struct s2n_connection *conn,
-             void *buf,
-             ssize_t size,
-             s2n_blocked_status *blocked);
-```
-
-**s2n_recv** decrypts and reads **size* to **buf** data from the associated
-connection. **s2n_recv** will return the number of bytes read and also return
-"0" on connection shutdown by the peer.
-
-**NOTE:** By default, **s2n_recv** will return after reading a single TLS record. To change this
-behavior such that it will read up to **size**, the config for the connection can be updated
-by calling **s2n_config_set_recv_multi_record**.
-
-**NOTE:** Unlike OpenSSL, repeated calls to **s2n_recv** should not duplicate the original parameters, but should update **buf** and **size** per the indication of size read. For example;
-
-```c
-s2n_blocked_status blocked;
-int bytes_read = 0;
-char data[10];
-do {
-    int r = s2n_recv(conn, data + bytes_read, 10 - bytes_read, &blocked);
-    if (r < 0) {
-        /* Some kind of error */
-        break;
-    }
-    bytes_read += r;
-} while (blocked != S2N_NOT_BLOCKED);
-```
-
-### s2n\_peek
-
-```c
-uint32_t s2n_peek(struct s2n_connection *conn);
-```
-
-**s2n_peek** allows users of s2n-tls to peek inside the data buffer of an s2n-tls connection to see if there more data to be read without actually reading it. This is useful when using select() on the underlying s2n-tls file descriptor with a message based application layer protocol. As a single call to s2n_recv may read all data off the underlying file descriptor, select() will be unable to tell you there if there is more application data ready for processing already loaded into the s2n-tls buffer. s2n_peek can then be used to determine if s2n_recv needs to be called before more data comes in on the raw fd.
-
-
-
-### s2n\_connection\_set\_send\_cb
-
-```c
-int s2n_connection_set_recv_cb(struct s2n_connection *conn, s2n_connection_recv recv);
-int s2n_connection_set_send_cb(struct s2n_connection *conn, s2n_connection_send send);
-int s2n_connection_set_recv_ctx(struct s2n_connection *conn, void *ctx);
-int s2n_connection_set_send_ctx(struct s2n_connection *conn, void *ctx);
-```
-
-s2n-tls also provides an I/O abstraction layer in the event the application would
-like to keep control over I/O operations. **s2n_connection_set_recv_cb** and
-**s2n_connection_set_send_cb** may be used to send or receive data with callbacks
-defined by the user. These may be blocking or nonblocking.
-
-```c
-typedef int s2n_connection_send(void *io_context, const uint8_t *buf, uint32_t len);
-typedef int s2n_connection_recv(void *io_context, uint8_t *buf, uint32_t len);
-```
-
-These callbacks take as input a context containing anything needed in the
-function (for example, a file descriptor), the buffer holding data to be sent
-or received, and the length of the buffer. The **io_context** passed to the
-callbacks may be set separately using **s2n_connection_set_recv_ctx** and
-**s2n_connection_set_send_ctx**.
-
-The callback may send or receive less than the requested length. The function
-should return the number of bytes sent/received, or set errno and return an error code < 0.
-
-### s2n_shutdown
-
-```c
-int s2n_shutdown(struct s2n_connection *conn,
-                 s2n_blocked_status *blocked);
-```
-
-**s2n_shutdown** attempts a closure at the TLS layer. It does not close the underlying transport. The call may block in either direction.
-Unlike other TLS implementations, **s2n_shutdown** attempts a graceful shutdown by default. It will not return with success unless a close_notify alert is successfully
-sent and received. As a result, **s2n_shutdown** may fail when interacting with a non-conformant TLS implementation.
-Once **s2n_shutdown** is complete:
-* The s2n_connection handle cannot be used for reading for writing.
-* The underlying transport can be closed. Most likely via `close()`.
-* The s2n_connection handle can be freed via [s2n_connection_free](#s2n\_connection\_free) or reused via [s2n_connection_wipe](#s2n\_connection\_wipe)
 
 ## Using Early Data / 0RTT
 
@@ -1273,7 +993,7 @@ while (s2n_negotiate(conn, &blocked) != S2N_SUCCESS) {
 **s2n-tls does not include anti-replay protection automatically.** Effective anti-replay protection for a multi-server application requires an external state shared by all servers. Without shared state, an attacker can capture early data originally sent to server A and successfully replay it against server B.
 
 The TLS1.3 specification suggests two possible anti-replay solutions that a user can implement:
-1. Single-Use Tickets (https://tools.ietf.org/rfc/rfc8446#section-8.1): Valid tickets are stored in a shared database and deleted after use. **s2n_connection_get_negotiated_psk_identity_length** and **s2n_connection_get_negotiated_psk_identity** can be used to get the ticket identifer, or "pre-shared key identity", associated with offered early data.
+1. Single-Use Tickets (https://tools.ietf.org/rfc/rfc8446#section-8.1): Valid tickets are stored in a shared database and deleted after use. **s2n_connection_get_negotiated_psk_identity_length** and **s2n_connection_get_negotiated_psk_identity** can be used to get the ticket identifier, or "pre-shared key identity", associated with offered early data.
 2. Client Hello Recording (https://tools.ietf.org/rfc/rfc8446#section-8.2): Instead of recording outstanding valid tickets, unique values from recent ClientHellos can be stored. The client hello message can be retrieved with **s2n_connection_get_client_hello** and the pre-shared key identity can be retrieved with **s2n_connection_get_negotiated_psk_identity_length** and **s2n_connection_get_negotiated_psk_identity**, but s2n-tls does not currently provide methods to retrieve the validated binders or the ClientHello.random.
 
 The **s2n_early_data_cb** can be used to hook an anti-replay solution into s2n-tls. The callback can be configured by using **s2n_config_set_early_data_cb**. Using the **s2n_offered_early_data** pointer offered by the callback, **s2n_offered_early_data_reject** or **s2n_offered_early_data_accept** can accept or reject the client request to use early data.
@@ -1323,8 +1043,9 @@ int s2n_early_data_cb_async_impl(struct s2n_connection *conn, struct s2n_offered
 
 **s2n_offered_early_data_get_context_length** and **s2n_offered_early_data_get_context** can be called to examine the optional user context associated with the early data. Unlike most s2n-tls callbacks, the context is not configured when the callback is set. Instead, the context is associated with the specific pre-shared key or session ticket used for early data. The context can be set for external pre-shared keys by calling **s2n_psk_set_early_data_context**. For session tickets, **s2n_connection_set_server_early_data_context** can be used to set the context the server includes on its new session tickets. Because the server needs to serialize the context when creating a new session ticket, the context is a byte buffer instead of the usual void pointer.
 
-
 # Examples
 
 To understand the API it may be easiest to see examples in action. s2n-tls's [bin/](https://github.com/aws/s2n-tls/blob/main/bin/) directory
-includes an example client (s2nc) and server (s2nd).
+includes an example client (`s2nc`) and server (`s2nd`).
+
+**Note:** `s2nc` and `s2nd` are intended for testing purposes only, and should not be used in production.

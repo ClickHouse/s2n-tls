@@ -166,6 +166,16 @@ where
     C: AsRef<Connection> + AsMut<Connection> + Unpin,
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    ///Access a shared reference to the underlaying io stream
+    pub fn get_ref(&self) -> &S {
+        &self.stream
+    }
+
+    ///Access the mutable reference to the underlaying io stream
+    pub fn get_mut(&mut self) -> &mut S {
+        &mut self.stream
+    }
+
     async fn open(mut conn: C, stream: S) -> Result<Self, Error> {
         conn.as_mut().set_blinding(Blinding::SelfService)?;
         let mut tls = TlsStream {
@@ -254,7 +264,7 @@ where
         self: Pin<&mut Self>,
         mut remembered_error: Result<(), Error>,
     ) -> Result<(), Error> {
-        let mut tls = self.get_mut();
+        let tls = self.get_mut();
 
         if tls.blinding.is_none() {
             let delay = tls.as_ref().remaining_blinding_delay()?;

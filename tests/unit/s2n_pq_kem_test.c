@@ -13,6 +13,10 @@
  * permissions and limitations under the License.
  */
 
+#include <openssl/crypto.h>
+
+#include "crypto/s2n_fips.h"
+#include "crypto/s2n_openssl.h"
 #include "pq-crypto/s2n_pq.h"
 #include "s2n_test.h"
 #include "tests/testlib/s2n_testlib.h"
@@ -50,6 +54,13 @@ int main()
 {
     BEGIN_TEST();
 
+#if defined(OPENSSL_IS_AWSLC) && defined(AWSLC_API_VERSION)
+    /* If using non-FIPS AWS-LC >= v1.6 (API vers. 21), expect Kyber512 KEM from AWS-LC */
+    if (!s2n_libcrypto_is_fips() && AWSLC_API_VERSION >= 21) {
+        EXPECT_TRUE(s2n_libcrypto_supports_kyber());
+    }
+#endif
+
     for (size_t i = 0; i < s2n_array_len(test_vectors); i++) {
         const struct s2n_kem_test_vector vector = test_vectors[i];
         const struct s2n_kem *kem = vector.kem;
@@ -77,9 +88,9 @@ int main()
                 EXPECT_OK(asm_toggle_funcs[j]());
 
                 /* Test a successful round-trip: keygen->enc->dec */
-                EXPECT_PQ_KEM_SUCCESS(kem->generate_keypair(public_key.data, private_key.data));
-                EXPECT_PQ_KEM_SUCCESS(kem->encapsulate(ciphertext.data, client_shared_secret.data, public_key.data));
-                EXPECT_PQ_KEM_SUCCESS(kem->decapsulate(server_shared_secret.data, ciphertext.data, private_key.data));
+                EXPECT_PQ_KEM_SUCCESS(kem->generate_keypair(kem, public_key.data, private_key.data));
+                EXPECT_PQ_KEM_SUCCESS(kem->encapsulate(kem, ciphertext.data, client_shared_secret.data, public_key.data));
+                EXPECT_PQ_KEM_SUCCESS(kem->decapsulate(kem, server_shared_secret.data, ciphertext.data, private_key.data));
                 EXPECT_BYTEARRAY_EQUAL(server_shared_secret.data, client_shared_secret.data, kem->shared_secret_key_length);
 
                 /* By design, if an invalid private key + ciphertext pair is provided to decapsulate(),
@@ -87,18 +98,18 @@ int main()
                  * that was "decapsulated" will be a garbage random value. */
                 ciphertext.data[0] ^= 1; /* Flip a bit to invalidate the ciphertext */
 
-                EXPECT_PQ_KEM_SUCCESS(kem->decapsulate(server_shared_secret.data, ciphertext.data, private_key.data));
+                EXPECT_PQ_KEM_SUCCESS(kem->decapsulate(kem, server_shared_secret.data, ciphertext.data, private_key.data));
                 EXPECT_BYTEARRAY_NOT_EQUAL(server_shared_secret.data, client_shared_secret.data, kem->shared_secret_key_length);
             }
         } else {
 #if defined(S2N_NO_PQ)
-            EXPECT_FAILURE_WITH_ERRNO(kem->generate_keypair(public_key.data, private_key.data), S2N_ERR_UNIMPLEMENTED);
-            EXPECT_FAILURE_WITH_ERRNO(kem->encapsulate(ciphertext.data, client_shared_secret.data, public_key.data), S2N_ERR_UNIMPLEMENTED);
-            EXPECT_FAILURE_WITH_ERRNO(kem->decapsulate(server_shared_secret.data, ciphertext.data, private_key.data), S2N_ERR_UNIMPLEMENTED);
+            EXPECT_FAILURE_WITH_ERRNO(kem->generate_keypair(kem, public_key.data, private_key.data), S2N_ERR_UNIMPLEMENTED);
+            EXPECT_FAILURE_WITH_ERRNO(kem->encapsulate(kem, ciphertext.data, client_shared_secret.data, public_key.data), S2N_ERR_UNIMPLEMENTED);
+            EXPECT_FAILURE_WITH_ERRNO(kem->decapsulate(kem, server_shared_secret.data, ciphertext.data, private_key.data), S2N_ERR_UNIMPLEMENTED);
 #else
-            EXPECT_FAILURE_WITH_ERRNO(kem->generate_keypair(public_key.data, private_key.data), S2N_ERR_PQ_DISABLED);
-            EXPECT_FAILURE_WITH_ERRNO(kem->encapsulate(ciphertext.data, client_shared_secret.data, public_key.data), S2N_ERR_PQ_DISABLED);
-            EXPECT_FAILURE_WITH_ERRNO(kem->decapsulate(server_shared_secret.data, ciphertext.data, private_key.data), S2N_ERR_PQ_DISABLED);
+            EXPECT_FAILURE_WITH_ERRNO(kem->generate_keypair(kem, public_key.data, private_key.data), S2N_ERR_PQ_DISABLED);
+            EXPECT_FAILURE_WITH_ERRNO(kem->encapsulate(kem, ciphertext.data, client_shared_secret.data, public_key.data), S2N_ERR_PQ_DISABLED);
+            EXPECT_FAILURE_WITH_ERRNO(kem->decapsulate(kem, server_shared_secret.data, ciphertext.data, private_key.data), S2N_ERR_PQ_DISABLED);
 #endif
         }
     }

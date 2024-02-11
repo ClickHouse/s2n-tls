@@ -18,9 +18,11 @@
     #include <features.h>
 #endif
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/param.h>
 #include <unistd.h>
 
 #include "error/s2n_errno.h"
@@ -48,11 +50,11 @@ static int s2n_mem_init_impl(void)
     long sysconf_rc = sysconf(_SC_PAGESIZE);
 
     /* sysconf must not error, and page_size cannot be 0 */
-    POSIX_ENSURE(sysconf_rc > 0, S2N_FAILURE);
+    POSIX_ENSURE_GT(sysconf_rc, 0);
 
     /* page_size must be a valid uint32 */
-    POSIX_ENSURE(sysconf_rc <= UINT32_MAX, S2N_FAILURE);
-
+    long max_page_size = MIN(UINT32_MAX, LONG_MAX);
+    POSIX_ENSURE_LTE(sysconf_rc, max_page_size);
     page_size = (uint32_t) sysconf_rc;
 
     if (getenv("S2N_DONT_MLOCK") || s2n_in_unit_test()) {
@@ -230,6 +232,8 @@ int s2n_free_object(uint8_t **p_data, uint32_t size)
 int s2n_dup(struct s2n_blob *from, struct s2n_blob *to)
 {
     POSIX_ENSURE(initialized, S2N_ERR_NOT_INITIALIZED);
+    POSIX_ENSURE_REF(to);
+    POSIX_ENSURE_REF(from);
     POSIX_ENSURE_EQ(to->size, 0);
     POSIX_ENSURE_EQ(to->data, NULL);
     POSIX_ENSURE_NE(from->size, 0);
