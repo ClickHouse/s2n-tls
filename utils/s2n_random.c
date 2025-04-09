@@ -504,25 +504,6 @@ S2N_RESULT s2n_rand_init(void)
     if (s2n_is_in_fips_mode()) {
         return S2N_RESULT_OK;
     }
-
-    /* Create an engine */
-    ENGINE *e = ENGINE_new();
-
-    RESULT_ENSURE(e != NULL, S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_set_id(e, S2N_RAND_ENGINE_ID), S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_set_name(e, "s2n entropy generator"), S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_set_flags(e, ENGINE_FLAGS_NO_REGISTER_ALL), S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_set_init_function(e, s2n_openssl_compat_init), S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_set_RAND(e, &s2n_openssl_rand_method), S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_add(e), S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_free(e), S2N_ERR_OPEN_RANDOM);
-
-    /* Use that engine for rand() */
-    e = ENGINE_by_id(S2N_RAND_ENGINE_ID);
-    RESULT_ENSURE(e != NULL, S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_init(e), S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_set_default(e, ENGINE_METHOD_RAND), S2N_ERR_OPEN_RANDOM);
-    RESULT_GUARD_OSSL(ENGINE_free(e), S2N_ERR_OPEN_RANDOM);
 #endif
 
     return S2N_RESULT_OK;
@@ -541,20 +522,6 @@ static int s2n_rand_cleanup_impl(void)
 S2N_RESULT s2n_rand_cleanup(void)
 {
     RESULT_ENSURE(s2n_rand_cleanup_cb() >= S2N_SUCCESS, S2N_ERR_CANCELLED);
-
-#if S2N_LIBCRYPTO_SUPPORTS_CUSTOM_RAND
-    /* Cleanup our rand ENGINE in libcrypto */
-    ENGINE *rand_engine = ENGINE_by_id(S2N_RAND_ENGINE_ID);
-    if (rand_engine) {
-        ENGINE_remove(rand_engine);
-        ENGINE_finish(rand_engine);
-        ENGINE_unregister_RAND(rand_engine);
-        ENGINE_free(rand_engine);
-        ENGINE_cleanup();
-        RAND_set_rand_engine(NULL);
-        RAND_set_rand_method(NULL);
-    }
-#endif
 
     s2n_rand_init_cb = s2n_rand_init_impl;
     s2n_rand_cleanup_cb = s2n_rand_cleanup_impl;
