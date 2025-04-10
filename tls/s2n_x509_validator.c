@@ -216,7 +216,7 @@ static S2N_RESULT s2n_verify_host_information_san_entry(struct s2n_connection *c
     if (current_name->type == GEN_DNS || current_name->type == GEN_URI) {
         *san_found = true;
 
-        const char *name = (const char *) ASN1_STRING_data(current_name->d.ia5);
+        const char *name = (const char *) ASN1_STRING_get0_data(current_name->d.ia5);
         RESULT_ENSURE_REF(name);
         int name_len = ASN1_STRING_length(current_name->d.ia5);
         RESULT_ENSURE_GT(name_len, 0);
@@ -331,7 +331,7 @@ static S2N_RESULT s2n_verify_host_information_common_name(struct s2n_connection 
     RESULT_ENSURE_GT(cn_len, 0);
     uint32_t len = (uint32_t) cn_len;
     RESULT_ENSURE_LTE(len, s2n_array_len(peer_cn) - 1);
-    RESULT_CHECKED_MEMCPY(peer_cn, ASN1_STRING_data(common_name), len);
+    RESULT_CHECKED_MEMCPY(peer_cn, ASN1_STRING_get0_data(common_name), len);
     RESULT_ENSURE(conn->verify_host_fn(peer_cn, len, conn->data_for_verify_host), S2N_ERR_CERT_UNTRUSTED);
 
     return S2N_RESULT_OK;
