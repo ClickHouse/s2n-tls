@@ -13,7 +13,7 @@
 * permissions and limitations under the License.
 */
 
-#include "pq-crypto/s2n_pq.h"
+#include "crypto/s2n_pq.h"
 #include "s2n_test.h"
 #include "testlib/s2n_testlib.h"
 #include "tls/extensions/s2n_client_supported_groups.h"
@@ -327,7 +327,6 @@ int main(int argc, char **argv)
             "AWS-CRT-SDK-TLSv1.2-2023",
             "20230317",
             "20210816",
-            "PQ-TLS-1-0-2021-05-20",
             "PQ-TLS-1-2-2023-04-08",
             "test_all"
         };

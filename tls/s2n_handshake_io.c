@@ -133,9 +133,6 @@ static const char *message_names[] = {
     MESSAGE_NAME_ENTRY(CLIENT_NPN),
 };
 
-/* Maximum number of messages in a handshake */
-#define S2N_MAX_HANDSHAKE_LENGTH    32
-
 /* We support different ordering of TLS Handshake messages, depending on what is being negotiated. There's also a dummy "INITIAL" handshake
  * that everything starts out as until we know better.
  */
@@ -844,7 +841,7 @@ static const char *tls13_handshake_type_names[] = {
 #define CONNECTION_IS_WRITER(conn) (ACTIVE_STATE(conn).writer == CONNECTION_WRITER(conn))
 
 /* Only used in our test cases. */
-message_type_t s2n_conn_get_current_message_type(struct s2n_connection *conn)
+message_type_t s2n_conn_get_current_message_type(const struct s2n_connection *conn)
 {
     return ACTIVE_MESSAGE(conn);
 }
@@ -921,11 +918,11 @@ int s2n_set_hello_retry_required(struct s2n_connection *conn)
 
     /* HelloRetryRequests also indicate rejection of early data.
      *
-     *= https://tools.ietf.org/rfc/rfc8446#section-4.2.10
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.10
      *# A server which receives an "early_data" extension MUST behave in one
      *# of three ways:
      *
-     *= https://tools.ietf.org/rfc/rfc8446#section-4.2.10
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.10
      *# -  Request that the client send another ClientHello by responding
      *#    with a HelloRetryRequest.
      **/
@@ -997,7 +994,7 @@ static S2N_RESULT s2n_validate_ems_status(struct s2n_connection *conn)
     bool ems_extension_recv = S2N_CBIT_TEST(conn->extension_requests_received, ems_ext_id);
 
     /**
-     *= https://tools.ietf.org/rfc/rfc7627#section-5.3
+     *= https://www.rfc-editor.org/rfc/rfc7627#section-5.3
      *# If the original session used the "extended_master_secret"
      *# extension but the new ClientHello does not contain it, the server
      *# MUST abort the abbreviated handshake.
@@ -1049,14 +1046,14 @@ int s2n_conn_set_handshake_type(struct s2n_connection *conn)
             /* We reuse the session if a valid TLS12 ticket is provided.
              * Otherwise, we will perform a full handshake and then generate
              * a new session ticket. */
-            if (s2n_decrypt_session_ticket(conn, &conn->client_ticket_to_decrypt) == S2N_SUCCESS) {
+            if (s2n_result_is_ok(s2n_resume_decrypt_session(conn, &conn->client_ticket_to_decrypt))) {
                 return S2N_SUCCESS;
             }
 
             POSIX_GUARD_RESULT(s2n_validate_ems_status(conn));
 
             /* Set up the handshake to send a session ticket since a valid ticket was not provided */
-            if (s2n_config_is_encrypt_decrypt_key_available(conn->config) == 1) {
+            if (s2n_result_is_ok(s2n_config_is_encrypt_key_available(conn->config))) {
                 conn->session_ticket_status = S2N_NEW_TICKET;
                 POSIX_GUARD_RESULT(s2n_handshake_type_set_tls12_flag(conn, WITH_SESSION_TICKET));
             }
@@ -1108,7 +1105,7 @@ int s2n_conn_set_handshake_no_client_cert(struct s2n_connection *conn)
 {
     s2n_cert_auth_type client_cert_auth_type;
     POSIX_GUARD(s2n_connection_get_client_auth_type(conn, &client_cert_auth_type));
-    S2N_ERROR_IF(client_cert_auth_type != S2N_CERT_AUTH_OPTIONAL, S2N_ERR_BAD_MESSAGE);
+    POSIX_ENSURE(client_cert_auth_type == S2N_CERT_AUTH_OPTIONAL, S2N_ERR_MISSING_CLIENT_CERT);
 
     POSIX_GUARD_RESULT(s2n_handshake_type_set_flag(conn, NO_CLIENT_CERT));
 
@@ -1329,19 +1326,15 @@ static int s2n_handshake_handle_sslv2(struct s2n_connection *conn)
 
     /* Handle an SSLv2 client hello */
     POSIX_GUARD(s2n_stuffer_copy(&conn->in, &conn->handshake.io, s2n_stuffer_data_available(&conn->in)));
-    /* Set the client hello version */
-    conn->client_hello_version = S2N_SSLv2;
+    conn->client_hello.sslv2 = true;
     /* Execute the state machine handler */
     int r = ACTIVE_STATE(conn).handler[conn->mode](conn);
     POSIX_GUARD(s2n_stuffer_wipe(&conn->handshake.io));
 
     /* We're done with the record, wipe it */
-    POSIX_GUARD(s2n_stuffer_wipe(&conn->header_in));
-    POSIX_GUARD(s2n_stuffer_wipe(&conn->in));
+    POSIX_GUARD_RESULT(s2n_record_wipe(conn));
 
     WITH_ERROR_BLINDING(conn, POSIX_GUARD(r));
-
-    conn->in_status = ENCRYPTED;
 
     /* Advance the state machine */
     POSIX_GUARD(s2n_advance_message(conn));
@@ -1358,15 +1351,6 @@ static int s2n_try_delete_session_cache(struct s2n_connection *conn)
     }
 
     return S2N_SUCCESS;
-}
-
-static S2N_RESULT s2n_wipe_record(struct s2n_connection *conn)
-{
-    RESULT_ENSURE_REF(conn);
-    RESULT_GUARD_POSIX(s2n_stuffer_wipe(&conn->header_in));
-    RESULT_GUARD_POSIX(s2n_stuffer_wipe(&conn->in));
-    conn->in_status = ENCRYPTED;
-    return S2N_RESULT_OK;
 }
 
 static S2N_RESULT s2n_finish_read(struct s2n_connection *conn)
@@ -1404,13 +1388,12 @@ static S2N_RESULT s2n_handshake_app_data_recv(struct s2n_connection *conn)
  * types to be interleaved at the record layer. We may get an alert message
  * during the handshake phase, or messages of types that we don't support (e.g.
  * HEARTBEAT messages), or during renegotiations we may even get application
- * data messages that need to be handled by the application. The latter is punted
- * for now (s2n does not support renegotiations).
+ * data messages that need to be handled by the application.
  */
 static int s2n_handshake_read_io(struct s2n_connection *conn)
 {
-    uint8_t record_type;
-    uint8_t message_type;
+    uint8_t record_type = 0;
+    uint8_t message_type = 0;
     int isSSLv2 = 0;
 
     /* Fill conn->in stuffer necessary for the handshake.
@@ -1422,7 +1405,7 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
         int r = s2n_read_full_record(conn, &record_type, &isSSLv2);
 
         /**
-         *= https://tools.ietf.org/rfc/rfc8446#section-4.2.10
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.10
          *# If the client attempts a 0-RTT handshake but the server
          *# rejects it, the server will generally not have the 0-RTT record
          *# protection keys and must instead use trial decryption (either with
@@ -1439,7 +1422,7 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
         if ((r < S2N_SUCCESS) && (s2n_errno == S2N_ERR_EARLY_DATA_TRIAL_DECRYPT)) {
             POSIX_GUARD(s2n_stuffer_reread(&conn->in));
             POSIX_GUARD_RESULT(s2n_early_data_record_bytes(conn, s2n_stuffer_data_available(&conn->in)));
-            POSIX_GUARD_RESULT(s2n_wipe_record(conn));
+            POSIX_GUARD_RESULT(s2n_record_wipe(conn));
             return S2N_SUCCESS;
         }
         POSIX_GUARD(r);
@@ -1473,7 +1456,7 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
         POSIX_GUARD(s2n_stuffer_wipe(&conn->handshake.io));
 
         /* We're done with the record, wipe it */
-        POSIX_GUARD_RESULT(s2n_wipe_record(conn));
+        POSIX_GUARD_RESULT(s2n_record_wipe(conn));
 
         /* Advance the state machine if this was an expected message */
         if (EXPECTED_RECORD_TYPE(conn) == TLS_CHANGE_CIPHER_SPEC && !CONNECTION_IS_WRITER(conn)) {
@@ -1489,7 +1472,7 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
         /* Ignore record types that we don't support */
 
         /* We're done with the record, wipe it */
-        POSIX_GUARD_RESULT(s2n_wipe_record(conn));
+        POSIX_GUARD_RESULT(s2n_record_wipe(conn));
         return S2N_SUCCESS;
     }
 
@@ -1499,7 +1482,7 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
     while (s2n_stuffer_data_available(&conn->in)) {
         /* We're done with negotiating but we have trailing data in this record. Bail on the handshake. */
         S2N_ERROR_IF(EXPECTED_RECORD_TYPE(conn) == TLS_APPLICATION_DATA, S2N_ERR_BAD_MESSAGE);
-        int r;
+        int r = 0;
         POSIX_GUARD((r = s2n_read_full_handshake_message(conn, &message_type)));
 
         /* Do we need more data? This happens for message fragmentation */
@@ -1507,32 +1490,33 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
             /* Break out of this inner loop, but since we're not changing the state, the
              * outer loop in s2n_handshake_io() will read another record.
              */
-            POSIX_GUARD_RESULT(s2n_wipe_record(conn));
+            POSIX_GUARD_RESULT(s2n_record_wipe(conn));
             return S2N_SUCCESS;
         }
 
-        s2n_cert_auth_type client_cert_auth_type;
-        POSIX_GUARD(s2n_connection_get_client_auth_type(conn, &client_cert_auth_type));
+        if (conn->mode == S2N_CLIENT) {
+            s2n_cert_auth_type client_cert_auth_type = { 0 };
+            POSIX_GUARD(s2n_connection_get_client_auth_type(conn, &client_cert_auth_type));
+            /* If client auth is optional, we initially assume it will not be requested.
+             * If we received a request, switch to a client auth handshake.
+             */
+            if (client_cert_auth_type != S2N_CERT_AUTH_REQUIRED && message_type == TLS_CERT_REQ) {
+                POSIX_ENSURE(client_cert_auth_type == S2N_CERT_AUTH_OPTIONAL, S2N_ERR_UNEXPECTED_CERT_REQUEST);
+                POSIX_ENSURE(IS_FULL_HANDSHAKE(conn), S2N_ERR_HANDSHAKE_STATE);
+                POSIX_GUARD_RESULT(s2n_handshake_type_set_flag(conn, CLIENT_AUTH));
+            }
 
-        /* If we're a Client, and received a ClientCertRequest message, and ClientAuth
-         * is set to optional, then switch the State Machine that we're using to expect the ClientCertRequest. */
-        if (conn->mode == S2N_CLIENT
-                && client_cert_auth_type == S2N_CERT_AUTH_OPTIONAL
-                && message_type == TLS_CERT_REQ) {
-            POSIX_ENSURE(IS_FULL_HANDSHAKE(conn), S2N_ERR_HANDSHAKE_STATE);
-            POSIX_GUARD_RESULT(s2n_handshake_type_set_flag(conn, CLIENT_AUTH));
-        }
-
-        /* According to rfc6066 section 8, server may choose not to send "CertificateStatus" message even if it has
-         * sent "status_request" extension in the ServerHello message. */
-        if (conn->mode == S2N_CLIENT
-                && EXPECTED_MESSAGE_TYPE(conn) == TLS_SERVER_CERT_STATUS
-                && message_type != TLS_SERVER_CERT_STATUS) {
-            POSIX_GUARD_RESULT(s2n_handshake_type_unset_tls12_flag(conn, OCSP_STATUS));
+            /* According to rfc6066 section 8, the server may choose not to send a "CertificateStatus"
+             * message even if it has sent a "status_request" extension in the ServerHello message.
+             */
+            if (EXPECTED_MESSAGE_TYPE(conn) == TLS_SERVER_CERT_STATUS
+                    && message_type != TLS_SERVER_CERT_STATUS) {
+                POSIX_GUARD_RESULT(s2n_handshake_type_unset_tls12_flag(conn, OCSP_STATUS));
+            }
         }
 
         /*
-         *= https://tools.ietf.org/rfc/rfc5246#section-7.4
+         *= https://www.rfc-editor.org/rfc/rfc5246#section-7.4
          *# The one message that is not bound by these ordering rules
          *# is the HelloRequest message, which can be sent at any time, but which
          *# SHOULD be ignored by the client if it arrives in the middle of a handshake.
@@ -1541,6 +1525,12 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
             POSIX_GUARD_RESULT(s2n_client_hello_request_validate(conn));
             POSIX_GUARD(s2n_stuffer_wipe(&conn->handshake.io));
             continue;
+        }
+
+        /* Check for missing Certificate Requests to surface a more specific error */
+        if (EXPECTED_MESSAGE_TYPE(conn) == TLS_CERT_REQ) {
+            POSIX_ENSURE(message_type == TLS_CERT_REQ,
+                    S2N_ERR_MISSING_CERT_REQUEST);
         }
 
         POSIX_ENSURE(record_type == EXPECTED_RECORD_TYPE(conn), S2N_ERR_BAD_MESSAGE);
@@ -1555,7 +1545,7 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
     }
 
     /* We're done with the record, wipe it */
-    POSIX_GUARD_RESULT(s2n_wipe_record(conn));
+    POSIX_GUARD_RESULT(s2n_record_wipe(conn));
     return S2N_SUCCESS;
 }
 
@@ -1578,9 +1568,7 @@ static int s2n_handle_retry_state(struct s2n_connection *conn)
 
     if (!CONNECTION_IS_WRITER(conn)) {
         /* We're done parsing the record, reset everything */
-        POSIX_GUARD(s2n_stuffer_wipe(&conn->header_in));
-        POSIX_GUARD(s2n_stuffer_wipe(&conn->in));
-        conn->in_status = ENCRYPTED;
+        POSIX_GUARD_RESULT(s2n_record_wipe(conn));
     }
 
     if (CONNECTION_IS_WRITER(conn)) {
@@ -1607,7 +1595,9 @@ static int s2n_handle_retry_state(struct s2n_connection *conn)
 
 bool s2n_handshake_is_complete(struct s2n_connection *conn)
 {
-    return conn && ACTIVE_STATE(conn).writer == 'B';
+    /* A deserialized connection implies that the handshake is complete because
+     * connections cannot be serialized before completing the handshake. */
+    return conn && (ACTIVE_STATE(conn).writer == 'B' || conn->deserialized_conn);
 }
 
 int s2n_negotiate_impl(struct s2n_connection *conn, s2n_blocked_status *blocked)

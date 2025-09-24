@@ -47,6 +47,9 @@
 #define TLS_NPN                       67
 #define TLS_MESSAGE_HASH              254
 
+/* Maximum number of messages in a handshake */
+#define S2N_MAX_HANDSHAKE_LENGTH 32
+
 /* This is the list of message types that we support */
 typedef enum {
     CLIENT_HELLO = 0,
@@ -101,13 +104,15 @@ struct s2n_handshake_parameters {
     struct s2n_blob client_cert_chain;
     s2n_pkey_type client_cert_pkey_type;
 
-    /* Signature/hash algorithm pairs offered by the client in the signature_algorithms extension */
-    struct s2n_sig_scheme_list client_sig_hash_algs;
+    /* Signature/hash algorithm pairs offered by the peer.
+     *
+     * In the case of server connections, this list contains the client's supported signature
+     * schemes offered in the ClientHello. In the case of client connections, this list contains
+     * the server's supported signature schemes offered in the CertificateRequest.
+     */
+    struct s2n_sig_scheme_list peer_sig_scheme_list;
     /* Signature scheme chosen by the server */
     const struct s2n_signature_scheme *server_cert_sig_scheme;
-
-    /* Signature/hash algorithm pairs offered by the server in the certificate request */
-    struct s2n_sig_scheme_list server_sig_hash_algs;
     /* Signature scheme chosen by the client */
     const struct s2n_signature_scheme *client_cert_sig_scheme;
 
@@ -153,7 +158,7 @@ struct s2n_handshake {
     /* Hash algorithms required for this handshake. The set of required hashes can be reduced as session parameters are
      * negotiated, i.e. cipher suite and protocol version.
      */
-    uint8_t required_hash_algs[S2N_HASH_SENTINEL];
+    uint8_t required_hash_algs[S2N_HASH_ALGS_COUNT];
 
     /*
      * Data required by the Finished messages.
@@ -201,7 +206,7 @@ struct s2n_handshake {
 };
 
 /* Only used in our test cases. */
-message_type_t s2n_conn_get_current_message_type(struct s2n_connection *conn);
+message_type_t s2n_conn_get_current_message_type(const struct s2n_connection *conn);
 
 /* s2n_handshake */
 int s2n_handshake_require_all_hashes(struct s2n_handshake *handshake);

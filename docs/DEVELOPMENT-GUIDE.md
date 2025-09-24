@@ -2,7 +2,7 @@
 
 If you are curious about the internals of s2n-tls, or interested in contributing to
 s2n-tls, this document is for you. If instead you are interested in using s2n-tls in an application
-that you are developing, please see the accompanying [Usage Guide](https://github.com/aws/s2n-tls/blob/main/docs/USAGE-GUIDE.md).
+that you are developing, please see the accompanying [Usage Guide](usage-guide).
 
 ## s2n-tls's development principles
 
@@ -162,7 +162,9 @@ s2n states publicly that every `s2n_init()` call should be paired with an `s2n_c
 For every thread that s2n functions are called in, a small amount of thread-local memory also gets initialized. This is to ensure that our random number generator will output different numbers in different threads. This memory needs to be cleaned up per thread and users can do this themselves if they call `s2n_cleanup()` per thread. But if they forget, we utilize a pthread key that calls a destructor function that cleans up our thread-local memory when the thread closes.
 
 An important thing to note is that a call to `s2n_cleanup()` usually does not fully clean up s2n. It only cleans up the thread-local memory. This is because we have an atexit handler that does fully clean up s2n at process-exit.
-The behavior is different if the atexit handler is disabled by calling `s2n_disable_atexit()`. Then s2n is actually fully cleaned up if `s2n_cleanup()` is called on the thread that called `s2n_init()`.
+The behavior is different if the atexit handler is disabled by calling `s2n_disable_atexit()`. Then s2n is actually fully cleaned up if `s2n_cleanup()` is called on the thread that called `s2n_init()`. `s2n_cleanup()` attempts to track the thread that had originally called `s2n_init()` and only performs the full cleanup when that "main" thread exits. If this behavior does not work for your use case (for example, if the "main" thread does not outlive child threads using s2n), you can instead call `s2n_cleanup_thread()` on each thread exit.
+
+> Note: `s2n_cleanup_thread()` is currently considered unstable, meaning the API is subject to change in a future release. To access this API, include `api/unstable/cleanup.h`.
 
 ### Control flow and the state machine
 
@@ -330,7 +332,7 @@ the first function returns a pointer to the existing location of the write curso
 The second function does the same thing, except that it increments the read cursor.
 Use of these functions is discouraged and should only be done when necessary for compatibility.
 
-One problem with returning raw pointers is that a pointer can become stale if the stuffer is later resized. Growable stuffers are resized using realloc(), which is free to copy and re-address memory. This could leave the original pointer location dangling, potentially leading to an invalid access. To prevent this, stuffers have a life-cycle and can be tainted, which prevents them from being resized within their present life-cycle.
+One problem with returning raw pointers is that a pointer can become stale if the stuffer is later resized. Growable stuffers are resized using realloc(), which is free to copy and re-address memory. This could leave the original pointer location dangling, potentially leading to an invalid access. To prevent this, stuffers have a life-cycle and can be marked as tainted, which prevents them from being resized within their present life-cycle.
 
 Internally stuffers track 4 pieces of state:
 
@@ -345,10 +347,10 @@ The `high_water_mark` tracks the furthermost byte which has been written but not
 Note that this may be past the `write_cursor` if `s2n_stuffer_rewrite()` has been called.
 Explicitly tracking the `high_water_mark` allows us to track the bytes which need to be wiped, and helps avoids needless zeroing of memory.
 The next two bits of state track whether a stuffer was dynamically allocated (and so should be free'd later) and whether or not it is growable.
-`tainted` is set to 1 whenever the raw access functions are called.
-If a stuffer is currently tainted then it can not be resized and it becomes ungrowable.
+`tainted` is set to true whenever `s2n_stuffer_raw_read/write()` are called.
+If a stuffer is currently tainted then it can not be resized and it becomes ungrowable due to memory safety constraints.
 This is reset when a stuffer is explicitly wiped, which begins the life-cycle anew.
-So any pointers returned by the raw access functions are legal only until `s2n_stuffer_wipe()` is called.
+So any pointers returned by `s2n_stuffer_raw_read/write()` are legal only until `s2n_stuffer_wipe()` is called.
 The end result is that this kind of pattern is legal:
 
 ```c
@@ -366,11 +368,13 @@ uint8_t * ptr = s2n_stuffer_raw_read(&in, 1500);
 
 /* This write will fail, the stuffer is no longer growable, as a raw
  * pointer was taken */
-GUARD(s2n_stuffer_write(&in, &some_more_data_blob);
+GUARD(s2n_stuffer_write(&in, &some_more_data_blob));
 
 /* Stuffer life cycle is now complete, reset everything and wipe */
 GUARD(s2n_stuffer_wipe(&in));
 ```
+
+Ideally, a `tainted` stuffer should be wiped before further write operations. If that is not an option, you may need to manually reset the `tainted` flag to false. When resetting the `tainted` flag, be very careful that the pointer is really no longer accessible and that a future developer won't unknowingly change the lifetime of the pointer. Include a comment explaining why resetting the `tainted` flag is safe.
 
 ## s2n_connection and the TLS state machine
 

@@ -50,12 +50,12 @@ static int s2n_test_init_encryption(struct s2n_connection *conn)
     uint8_t *client_implicit_iv = conn->client->client_implicit_iv;
 
     /* Initialize record algorithm */
-    POSIX_GUARD(cipher_suite->record_alg->cipher->init(server_session_key));
-    POSIX_GUARD(cipher_suite->record_alg->cipher->init(client_session_key));
-    POSIX_GUARD(cipher_suite->record_alg->cipher->set_encryption_key(server_session_key, &key));
-    POSIX_GUARD(cipher_suite->record_alg->cipher->set_encryption_key(client_session_key, &key));
-    POSIX_GUARD(cipher_suite->record_alg->cipher->set_decryption_key(server_session_key, &key));
-    POSIX_GUARD(cipher_suite->record_alg->cipher->set_decryption_key(client_session_key, &key));
+    POSIX_GUARD_RESULT(cipher_suite->record_alg->cipher->init(server_session_key));
+    POSIX_GUARD_RESULT(cipher_suite->record_alg->cipher->init(client_session_key));
+    POSIX_GUARD_RESULT(cipher_suite->record_alg->cipher->set_encryption_key(server_session_key, &key));
+    POSIX_GUARD_RESULT(cipher_suite->record_alg->cipher->set_encryption_key(client_session_key, &key));
+    POSIX_GUARD_RESULT(cipher_suite->record_alg->cipher->set_decryption_key(server_session_key, &key));
+    POSIX_GUARD_RESULT(cipher_suite->record_alg->cipher->set_decryption_key(client_session_key, &key));
 
     /* Initialized secrets */
     POSIX_CHECKED_MEMCPY(conn->secrets.version.tls13.server_app_secret, application_secret.data, application_secret.size);
@@ -78,8 +78,8 @@ int main(int argc, char **argv)
 
     /* s2n_send sends key update if necessary */
     {
-        struct s2n_connection *server_conn;
-        struct s2n_connection *client_conn;
+        struct s2n_connection *server_conn = NULL;
+        struct s2n_connection *client_conn = NULL;
         EXPECT_NOT_NULL(server_conn = s2n_connection_new(S2N_SERVER));
         EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
         server_conn->actual_protocol_version = S2N_TLS13;
@@ -127,21 +127,21 @@ int main(int argc, char **argv)
     {
         EXPECT_SUCCESS(s2n_disable_tls13_in_test());
 
-        char *cert_chain;
-        char *private_key;
+        char *cert_chain = NULL;
+        char *private_key = NULL;
         EXPECT_NOT_NULL(cert_chain = malloc(S2N_MAX_TEST_PEM_SIZE));
         EXPECT_NOT_NULL(private_key = malloc(S2N_MAX_TEST_PEM_SIZE));
         EXPECT_SUCCESS(setenv("S2N_DONT_MLOCK", "1", 0));
         struct s2n_test_io_pair io_pair;
         EXPECT_SUCCESS(s2n_io_pair_init_non_blocking(&io_pair));
 
-        struct s2n_connection *client_conn;
-        struct s2n_connection *server_conn;
-        struct s2n_config *server_config;
-        struct s2n_cert_chain_and_key *chain_and_key;
+        struct s2n_connection *client_conn = NULL;
+        struct s2n_connection *server_conn = NULL;
+        struct s2n_config *server_config = NULL;
+        struct s2n_cert_chain_and_key *chain_and_key = NULL;
         s2n_blocked_status blocked = S2N_NOT_BLOCKED;
 
-        struct s2n_config *client_config;
+        struct s2n_config *client_config = NULL;
         EXPECT_NOT_NULL(client_config = s2n_config_new());
         EXPECT_SUCCESS(s2n_config_set_check_stapled_ocsp_response(client_config, 0));
         EXPECT_SUCCESS(s2n_config_disable_x509_verification(client_config));

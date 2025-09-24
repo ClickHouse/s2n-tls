@@ -32,6 +32,7 @@
 
 #include "api/s2n.h"
 #include "crypto/s2n_fips.h"
+#include "crypto/s2n_libcrypto.h"
 #include "s2n_test.h"
 #include "utils/s2n_fork_detection.h"
 
@@ -47,6 +48,12 @@
 #define NUMBER_OF_BOUNDS               10
 #define NUMBER_OF_RANGE_FUNCTION_CALLS 200
 #define MAX_REPEATED_OUTPUT            4
+
+bool s2n_libcrypto_is_fips(void);
+bool s2n_libcrypto_is_openssl(void);
+S2N_RESULT s2n_rand_device_validate(struct s2n_rand_device *device);
+S2N_RESULT s2n_rand_get_urandom_for_test(struct s2n_rand_device **device);
+S2N_RESULT s2n_rand_set_urandom_for_test();
 
 struct random_test_case {
     const char *test_case_label;
@@ -374,7 +381,7 @@ static S2N_RESULT s2n_fork_test(
         S2N_RESULT (*s2n_get_random_data_cb)(struct s2n_blob *blob),
         S2N_RESULT (*s2n_get_random_data_cb_thread)(struct s2n_blob *blob))
 {
-    pid_t proc_id;
+    pid_t proc_id = 0;
     int pipes[2];
 
     /* A simple fork test. Generates random data in the parent and child, and
@@ -460,7 +467,7 @@ static S2N_RESULT s2n_clone_tests(
 {
 #if defined(S2N_CLONE_SUPPORTED)
 
-    int proc_id;
+    int proc_id = 0;
     int pipes[2];
 
     EXPECT_SUCCESS(pipe(pipes));
@@ -778,12 +785,94 @@ static int s2n_random_noop_destructor_test_cb(struct random_test_case *test_case
 
 static int s2n_random_rand_bytes_after_cleanup_cb(struct random_test_case *test_case)
 {
-    s2n_disable_atexit();
     EXPECT_SUCCESS(s2n_init());
-    EXPECT_SUCCESS(s2n_cleanup());
+    EXPECT_SUCCESS(s2n_cleanup_final());
 
     unsigned char rndbytes[16];
     EXPECT_EQUAL(RAND_bytes(rndbytes, sizeof(rndbytes)), 1);
+
+    return S2N_SUCCESS;
+}
+
+static int s2n_random_rand_bytes_before_init(struct random_test_case *test_case)
+{
+    /* s2n_libcrypto_is_fips() is used since we are testing `s2n_init()` */
+    if (s2n_supports_custom_rand() && !s2n_libcrypto_is_fips()) {
+        /* Calling RAND_bytes will set a global random method */
+        unsigned char rndbytes[16] = { 0 };
+        EXPECT_EQUAL(RAND_bytes(rndbytes, sizeof(rndbytes)), 1);
+        const RAND_METHOD *rand_method = RAND_get_rand_method();
+        EXPECT_NOT_NULL(rand_method);
+        EXPECT_NOT_EQUAL((void (*)(void)) rand_method->bytes, (void (*)(void)) s2n_openssl_compat_rand);
+
+        EXPECT_SUCCESS(s2n_init());
+
+        /* The global random method is overridden after calling s2n_init() */
+        const RAND_METHOD *custom_rand_method = RAND_get_rand_method();
+        EXPECT_NOT_NULL(custom_rand_method);
+        EXPECT_EQUAL((void (*)(void)) custom_rand_method->bytes, (void (*)(void)) s2n_openssl_compat_rand);
+
+        /* RAND_bytes is still successful */
+        EXPECT_EQUAL(RAND_bytes(rndbytes, sizeof(rndbytes)), 1);
+    }
+    return S2N_SUCCESS;
+}
+
+static int s2n_random_invalid_urandom_fd_cb(struct random_test_case *test_case)
+{
+    struct s2n_rand_device *dev_urandom = NULL;
+    EXPECT_OK(s2n_rand_get_urandom_for_test(&dev_urandom));
+    EXPECT_NOT_NULL(dev_urandom);
+
+    for (size_t test = 0; test <= 1; test++) {
+        EXPECT_EQUAL(dev_urandom->fd, -1);
+
+        /* Validation should fail before initialization. */
+        EXPECT_ERROR(s2n_rand_device_validate(dev_urandom));
+
+        EXPECT_SUCCESS(s2n_init());
+
+        /* Validation should succeed after initialization. */
+        EXPECT_OK(s2n_rand_device_validate(dev_urandom));
+
+        /* Override the mix callback with urandom, in case support for rdrand is detected and enabled. */
+        EXPECT_OK(s2n_rand_set_urandom_for_test());
+
+        EXPECT_TRUE(dev_urandom->fd > STDERR_FILENO);
+        if (test == 0) {
+            /* Test 0 tests for closed dev_urandom fd */
+            EXPECT_EQUAL(close(dev_urandom->fd), 0);
+        } else {
+            /* Test 1 tests for invalid value for dev_urandom.
+             * Needs to close the previously set dev_urandom fd
+             * before making it invalid. */
+            EXPECT_EQUAL(close(dev_urandom->fd), 0);
+            /* Make the file descriptor invalid by pointing it to STDERR. */
+            dev_urandom->fd = STDERR_FILENO;
+        }
+
+        /* Validation should fail when the file descriptor is invalid. */
+        EXPECT_ERROR(s2n_rand_device_validate(dev_urandom));
+
+        s2n_stack_blob(rand_data, 16, 16);
+        EXPECT_OK(s2n_get_public_random_data(&rand_data));
+
+        uint64_t public_bytes_used = 0;
+        EXPECT_OK(s2n_get_public_random_bytes_used(&public_bytes_used));
+
+        if (s2n_is_in_fips_mode()) {
+            /* The urandom implementation should not be in use when s2n-tls is in FIPS mode. */
+            EXPECT_EQUAL(public_bytes_used, 0);
+        } else {
+            /* When the urandom implementation is used, the file descriptor is re-opened and
+             * validation should succeed.
+             */
+            EXPECT_OK(s2n_rand_device_validate(dev_urandom));
+            EXPECT_TRUE(public_bytes_used > 0);
+        }
+
+        EXPECT_SUCCESS(s2n_cleanup_final());
+    }
 
     return S2N_SUCCESS;
 }
@@ -800,11 +889,50 @@ struct random_test_case random_test_cases[] = {
      */
     { "Test failure.", s2n_random_test_case_failure_cb, CLONE_TEST_DETERMINE_AT_RUNTIME, 1 },
     { "Test libcrypto's RAND engine is reset correctly after manual s2n_cleanup()", s2n_random_rand_bytes_after_cleanup_cb, CLONE_TEST_DETERMINE_AT_RUNTIME, EXIT_SUCCESS },
+    { "Test getting entropy with an invalid file descriptor", s2n_random_invalid_urandom_fd_cb, CLONE_TEST_DETERMINE_AT_RUNTIME, EXIT_SUCCESS },
+    { "Test libcrypto's global RAND is unset after calling s2n_init()", s2n_random_rand_bytes_before_init, CLONE_TEST_DETERMINE_AT_RUNTIME, EXIT_SUCCESS },
 };
 
 int main(int argc, char **argv)
 {
     BEGIN_TEST_NO_INIT();
+
+    /* Feature probe: Negative test */
+    {
+        if (s2n_libcrypto_is_awslc()) {
+#if defined(S2N_LIBCRYPTO_SUPPORTS_ENGINE)
+            FAIL_MSG("Expected ENGINE feature probe to be disabled with AWS-LC");
+#endif
+        }
+
+        if (s2n_libcrypto_is_openssl_fips()) {
+#if !S2N_LIBCRYPTO_SUPPORTS_PRIVATE_RAND
+            FAIL_MSG("Expected private rand support from openssl3 fips");
+#endif
+        }
+    };
+
+    /* Feature probe: Positive test
+     *
+     * TODO: Test missing due to unrelated feature probe failure on AL2.
+     * https://github.com/aws/s2n-tls/issues/4900
+     */
+
+    /* s2n_supports_custom_rand */
+    {
+        if (s2n_supports_custom_rand()) {
+            EXPECT_TRUE(s2n_libcrypto_is_openssl());
+            EXPECT_FALSE(s2n_is_in_fips_mode());
+        }
+
+        /* Ensure that disabling the S2N_OVERRIDE_LIBCRYPTO_RAND_ENGINE CMake option disables the
+         * custom rand override feature. When the S2N_DISABLE_RAND_ENGINE_OVERRIDE_EXPECTED
+         * environment variable is set, this CMake option is expected to be disabled.
+         */
+        if (getenv("S2N_DISABLE_RAND_ENGINE_OVERRIDE_EXPECTED")) {
+            EXPECT_FALSE(s2n_supports_custom_rand());
+        }
+    };
 
     /* For each test case, creates a child process that runs the test case.
      *

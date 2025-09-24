@@ -33,8 +33,8 @@ static const uint8_t buf_to_send[1023] = { 27 };
 
 int mock_client(struct s2n_test_io_pair *io_pair)
 {
-    struct s2n_connection *conn;
-    struct s2n_config *client_config;
+    struct s2n_connection *conn = NULL;
+    struct s2n_config *client_config = NULL;
     s2n_blocked_status blocked;
     int result = 0;
 
@@ -58,6 +58,7 @@ int mock_client(struct s2n_test_io_pair *io_pair)
     s2n_shutdown(conn, &blocked);
     s2n_connection_free(conn);
     s2n_config_free(client_config);
+    EXPECT_SUCCESS(s2n_io_pair_close_one_end(io_pair, S2N_CLIENT));
     s2n_cleanup();
 
     exit(0);
@@ -70,10 +71,10 @@ int mock_client(struct s2n_test_io_pair *io_pair)
 int main(int argc, char **argv)
 {
     s2n_blocked_status blocked;
-    int status;
-    pid_t pid;
-    char *cert_chain_pem;
-    char *private_key_pem;
+    int status = 0;
+    pid_t pid = 0;
+    char *cert_chain_pem = NULL;
+    char *private_key_pem = NULL;
     uint8_t buf[sizeof(buf_to_send)];
     uint32_t n = 0;
     ssize_t ret = 0;
@@ -82,7 +83,7 @@ int main(int argc, char **argv)
     EXPECT_SUCCESS(s2n_disable_tls13_in_test());
 
     /* Create a pipe */
-    struct s2n_test_io_pair io_pair;
+    DEFER_CLEANUP(struct s2n_test_io_pair io_pair = { 0 }, s2n_io_pair_close);
     EXPECT_SUCCESS(s2n_io_pair_init(&io_pair));
 
     /* Create a child process */
@@ -195,6 +196,7 @@ int main(int argc, char **argv)
     free(cert_chain_pem);
     free(private_key_pem);
 
+    EXPECT_SUCCESS(s2n_io_pair_close_one_end(&io_pair, S2N_SERVER));
     s2n_cleanup();
 
     END_TEST();

@@ -24,12 +24,12 @@
 #include "utils/s2n_atomic.h"
 #include "utils/s2n_safety.h"
 
-static keyupdate_request key_update_request_val = S2N_KEY_UPDATE_NOT_REQUESTED;
+static s2n_peer_key_update key_update_request_val = S2N_KEY_UPDATE_NOT_REQUESTED;
 
 int s2n_key_update_write(struct s2n_blob *out);
 int s2n_check_record_limit(struct s2n_connection *conn, struct s2n_blob *sequence_number);
 
-S2N_RESULT s2n_set_key_update_request_for_testing(keyupdate_request request)
+S2N_RESULT s2n_set_key_update_request_for_testing(s2n_peer_key_update request)
 {
     RESULT_ENSURE(s2n_in_unit_test(), S2N_ERR_NOT_IN_UNIT_TEST);
     key_update_request_val = request;
@@ -41,13 +41,15 @@ int s2n_key_update_recv(struct s2n_connection *conn, struct s2n_stuffer *request
     POSIX_ENSURE_REF(conn);
     POSIX_ENSURE(conn->actual_protocol_version >= S2N_TLS13, S2N_ERR_BAD_MESSAGE);
     POSIX_ENSURE(!s2n_connection_is_quic_enabled(conn), S2N_ERR_BAD_MESSAGE);
+    POSIX_ENSURE(!conn->ktls_recv_enabled, S2N_ERR_KTLS_KEYUPDATE);
 
-    uint8_t key_update_request;
+    uint8_t key_update_request = 0;
     POSIX_GUARD(s2n_stuffer_read_uint8(request, &key_update_request));
-    S2N_ERROR_IF(key_update_request != S2N_KEY_UPDATE_NOT_REQUESTED && key_update_request != S2N_KEY_UPDATE_REQUESTED,
-            S2N_ERR_BAD_MESSAGE);
     if (key_update_request == S2N_KEY_UPDATE_REQUESTED) {
+        POSIX_ENSURE(!conn->ktls_send_enabled, S2N_ERR_KTLS_KEYUPDATE);
         s2n_atomic_flag_set(&conn->key_update_pending);
+    } else {
+        POSIX_ENSURE(key_update_request == S2N_KEY_UPDATE_NOT_REQUESTED, S2N_ERR_BAD_MESSAGE);
     }
 
     /* Update peer's key since a key_update was received */
@@ -67,15 +69,12 @@ int s2n_key_update_send(struct s2n_connection *conn, s2n_blocked_status *blocked
     POSIX_ENSURE_GTE(conn->actual_protocol_version, S2N_TLS13);
 
     struct s2n_blob sequence_number = { 0 };
-    if (conn->mode == S2N_CLIENT) {
-        POSIX_GUARD(s2n_blob_init(&sequence_number, conn->secure->client_sequence_number, S2N_TLS_SEQUENCE_NUM_LEN));
-    } else {
-        POSIX_GUARD(s2n_blob_init(&sequence_number, conn->secure->server_sequence_number, S2N_TLS_SEQUENCE_NUM_LEN));
-    }
-
+    POSIX_GUARD_RESULT(s2n_connection_get_sequence_number(conn, conn->mode, &sequence_number));
     POSIX_GUARD(s2n_check_record_limit(conn, &sequence_number));
 
     if (s2n_atomic_flag_test(&conn->key_update_pending)) {
+        POSIX_ENSURE(!conn->ktls_send_enabled, S2N_ERR_KTLS_KEY_LIMIT);
+
         /* Flush any buffered records to ensure an empty output buffer.
          *
          * This is important when buffering multiple records because we don't:
@@ -145,5 +144,14 @@ int s2n_check_record_limit(struct s2n_connection *conn, struct s2n_blob *sequenc
         s2n_atomic_flag_set(&conn->key_update_pending);
     }
 
+    return S2N_SUCCESS;
+}
+
+int s2n_connection_request_key_update(struct s2n_connection *conn, s2n_peer_key_update peer_request)
+{
+    POSIX_ENSURE_REF(conn);
+    /* s2n-tls does not currently support requesting key updates from peers */
+    POSIX_ENSURE(peer_request == S2N_KEY_UPDATE_NOT_REQUESTED, S2N_ERR_INVALID_ARGUMENT);
+    s2n_atomic_flag_set(&conn->key_update_pending);
     return S2N_SUCCESS;
 }

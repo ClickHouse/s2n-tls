@@ -80,6 +80,7 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_DECODE_PRIVATE_KEY, "error decoding private key") \
     ERR_ENTRY(S2N_ERR_INVALID_SIGNATURE_ALGORITHM, "Invalid signature algorithm") \
     ERR_ENTRY(S2N_ERR_INVALID_SIGNATURE_SCHEME, "Invalid signature scheme") \
+    ERR_ENTRY(S2N_ERR_NO_VALID_SIGNATURE_SCHEME, "Unable to negotiate a supported signature scheme") \
     ERR_ENTRY(S2N_ERR_CBC_VERIFY, "Failed CBC verification") \
     ERR_ENTRY(S2N_ERR_DH_COPYING_PUBLIC_KEY, "error copying Diffie-Hellman public key") \
     ERR_ENTRY(S2N_ERR_SIGN, "error signing data") \
@@ -87,6 +88,8 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_ECDHE_GEN_KEY, "Failed to generate an ECDHE key") \
     ERR_ENTRY(S2N_ERR_ECDHE_SHARED_SECRET, "Error computing ECDHE shared secret") \
     ERR_ENTRY(S2N_ERR_ECDHE_UNSUPPORTED_CURVE, "Unsupported EC curve was presented during an ECDHE handshake") \
+    ERR_ENTRY(S2N_ERR_ECDHE_INVALID_PUBLIC_KEY, "Failed to validate the peer's point on the elliptic curve") \
+    ERR_ENTRY(S2N_ERR_ECDHE_INVALID_PUBLIC_KEY_FIPS, "Failed to validate the peer's point on the elliptic curve, per FIPS requirements") \
     ERR_ENTRY(S2N_ERR_ECDSA_UNSUPPORTED_CURVE, "Unsupported EC curve was presented during an ECDSA SignatureScheme handshake") \
     ERR_ENTRY(S2N_ERR_ECDHE_SERIALIZING, "Error serializing ECDHE public") \
     ERR_ENTRY(S2N_ERR_KEM_UNSUPPORTED_PARAMS, "Unsupported KEM params was presented during a handshake that uses a KEM") \
@@ -102,6 +105,8 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_CERT_INVALID, "Certificate is invalid") \
     ERR_ENTRY(S2N_ERR_CERT_MAX_CHAIN_DEPTH_EXCEEDED, "The maximum certificate chain depth has been exceeded") \
     ERR_ENTRY(S2N_ERR_CERT_REJECTED, "Certificate failed custom application validation") \
+    ERR_ENTRY(S2N_ERR_CERT_UNHANDLED_CRITICAL_EXTENSION, "Unhandled critical certificate extension") \
+    ERR_ENTRY(S2N_ERR_SECURITY_POLICY_INCOMPATIBLE_CERT, "Incompatibility found between loaded certificates and chosen security policy") \
     ERR_ENTRY(S2N_ERR_CRL_LOOKUP_FAILED, "No CRL could be found for the corresponding certificate") \
     ERR_ENTRY(S2N_ERR_CRL_SIGNATURE, "The signature of the CRL is invalid") \
     ERR_ENTRY(S2N_ERR_CRL_ISSUER, "Unable to get the CRL issuer certificate") \
@@ -187,7 +192,6 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_ARRAY_INDEX_OOB, "Array index out of bounds") \
     ERR_ENTRY(S2N_ERR_FREE_STATIC_BLOB, "Cannot free a static blob") \
     ERR_ENTRY(S2N_ERR_RESIZE_STATIC_BLOB, "Cannot resize a static blob") \
-    ERR_ENTRY(S2N_ERR_NO_SUPPORTED_LIBCRYPTO_API, "libcrypto does not support this API") \
     ERR_ENTRY(S2N_ERR_RECORD_LENGTH_TOO_LARGE, "Record length exceeds protocol version maximum") \
     ERR_ENTRY(S2N_ERR_SET_DUPLICATE_VALUE, "Set already contains the provided value") \
     ERR_ENTRY(S2N_ERR_ASYNC_CALLBACK_FAILED, "Callback associated with async private keys function has failed") \
@@ -197,7 +201,7 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_CLIENT_MODE, "Operation not allowed in client mode") \
     ERR_ENTRY(S2N_ERR_CLIENT_MODE_DISABLED, "client connections not allowed") \
     ERR_ENTRY(S2N_ERR_TOO_MANY_CERTIFICATES, "only 1 certificate is supported in client mode") \
-    ERR_ENTRY(S2N_ERR_TOO_MANY_SIGNATURE_SCHEMES, "Max supported length of SignatureAlgorithms/SignatureSchemes list is 32") \
+    ERR_ENTRY(S2N_ERR_TOO_MANY_SIGNATURE_SCHEMES, "Max supported length of SignatureAlgorithms/SignatureSchemes list is 128") \
     ERR_ENTRY(S2N_ERR_CLIENT_AUTH_NOT_SUPPORTED_IN_FIPS_MODE, "Client Auth is not supported when in FIPS mode") \
     ERR_ENTRY(S2N_ERR_INVALID_BASE64, "invalid base64 encountered") \
     ERR_ENTRY(S2N_ERR_INVALID_HEX, "invalid HEX encountered") \
@@ -252,6 +256,7 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_UNSUPPORTED_EXTENSION, "Illegal use of a known, supported extension") \
     ERR_ENTRY(S2N_ERR_MISSING_EXTENSION, "Mandatory extension not received") \
     ERR_ENTRY(S2N_ERR_DUPLICATE_EXTENSION, "Extension block contains two or more extensions of the same type") \
+    ERR_ENTRY(S2N_ERR_DEPRECATED_SECURITY_POLICY, "Deprecated security policy. Please choose a different security policy.") \
     ERR_ENTRY(S2N_ERR_INVALID_SECURITY_POLICY, "Invalid security policy") \
     ERR_ENTRY(S2N_ERR_INVALID_KEM_PREFERENCES, "Invalid kem preferences version") \
     ERR_ENTRY(S2N_ERR_INVALID_PARSED_EXTENSIONS, "Invalid parsed extension data") \
@@ -263,10 +268,10 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_INVALID_STATE, "Invalid state, this is the result of invalid use of an API. Check the API documentation for the function that raised this error for more info") \
     ERR_ENTRY(S2N_ERR_UNSUPPORTED_WITH_QUIC, "Functionality not supported when running with QUIC support enabled") \
     ERR_ENTRY(S2N_ERR_PQ_CRYPTO, "An error occurred in a post-quantum crypto function") \
-    ERR_ENTRY(S2N_ERR_PQ_DISABLED, "Post-quantum crypto is disabled") \
     ERR_ENTRY(S2N_ERR_DUPLICATE_PSK_IDENTITIES, "The list of pre-shared keys provided contains duplicate psk identities") \
     ERR_ENTRY(S2N_ERR_OFFERED_PSKS_TOO_LONG, "The total pre-shared key data is too long to send over the wire") \
     ERR_ENTRY(S2N_ERR_INVALID_SESSION_TICKET, "Session ticket data is not valid") \
+    ERR_ENTRY(S2N_ERR_ZERO_LIFETIME_TICKET, "Calculated session lifetime is zero") \
     ERR_ENTRY(S2N_ERR_REENTRANCY, "Original execution must complete before method can be called again") \
     ERR_ENTRY(S2N_ERR_INVALID_CERT_STATE, "Certificate validation entered an invalid state and is not able to continue") \
     ERR_ENTRY(S2N_ERR_INVALID_EARLY_DATA_STATE, "Early data in invalid state") \
@@ -302,6 +307,17 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_ATOMIC, "Atomic operations in this environment would require locking") \
     ERR_ENTRY(S2N_ERR_TEST_ASSERTION, "Test assertion failed") \
     ERR_ENTRY(S2N_ERR_KTLS_RENEG, "kTLS does not support secure renegotiation") \
+    ERR_ENTRY(S2N_ERR_KTLS_KEYUPDATE, "Received KeyUpdate from peer, but kernel does not support updating tls keys") \
+    ERR_ENTRY(S2N_ERR_KTLS_KEY_LIMIT, "Reached key encryption limit, but kernel does not support updating tls keys") \
+    ERR_ENTRY(S2N_ERR_UNEXPECTED_CERT_REQUEST, "Client forbids mutual authentication, but server requested a cert") \
+    ERR_ENTRY(S2N_ERR_MISSING_CERT_REQUEST, "Client requires mutual authentication, but server did not request a cert") \
+    ERR_ENTRY(S2N_ERR_MISSING_CLIENT_CERT, "Server requires client certificate") \
+    ERR_ENTRY(S2N_ERR_INVALID_SERIALIZED_CONNECTION, "Serialized connection is invalid"); \
+    ERR_ENTRY(S2N_ERR_TOO_MANY_CAS, "Too many certificate authorities in trust store"); \
+    ERR_ENTRY(S2N_ERR_BAD_HEX, "Could not parse malformed hex string"); \
+    ERR_ENTRY(S2N_ERR_CONFIG_NULL_BEFORE_CH_CALLBACK, "Config set to NULL before client hello callback. This should not be possible outside of tests."); \
+    ERR_ENTRY(S2N_ERR_API_UNSUPPORTED_BY_LIBCRYPTO, "The invoked s2n-tls API is not supported by the libcrypto"); \
+    ERR_ENTRY(S2N_ERR_FIPS_MODE_UNSUPPORTED, "FIPS mode is not supported for the libcrypto"); \
     /* clang-format on */
 
 #define ERR_STR_CASE(ERR, str) \
@@ -459,7 +475,7 @@ int s2n_print_stacktrace(FILE *fptr)
     if (!s_s2n_stack_traces_enabled) {
         fprintf(fptr, "%s\n%s\n",
                 "NOTE: Some details are omitted, run with S2N_PRINT_STACKTRACE=1 for a verbose backtrace.",
-                "See https://github.com/aws/s2n-tls/blob/main/docs/USAGE-GUIDE.md");
+                "See https://github.com/aws/s2n-tls/blob/main/docs/usage-guide");
         return S2N_SUCCESS;
     }
 

@@ -11,7 +11,6 @@ s2n-tls is a C99 implementation of the TLS/SSL protocols that is designed to be 
 [![C99](https://img.shields.io/badge/language-C99-blue.svg)](http://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf)
 [![Github forks](https://img.shields.io/github/forks/aws/s2n-tls.svg)](https://github.com/aws/s2n-tls/network)
 [![Github stars](https://img.shields.io/github/stars/aws/s2n-tls.svg)](https://github.com/aws/s2n-tls/stargazers)
-[![Join the chat at https://gitter.im/awslabs/s2n](https://badges.gitter.im/awslabs/s2n.svg)](https://gitter.im/awslabs/s2n?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 ## Quickstart for Ubuntu
 
@@ -39,17 +38,46 @@ cmake --install build
 See the [s2n-tls build documentation](docs/BUILD.md) for further guidance on building s2n-tls for your platform.
 
 ## Have a Question?
-If you have any questions about Submitting PR's, Opening Issues, s2n-tls API usage, or something similar, we have a public chatroom available here to answer your questions: https://gitter.im/awslabs/s2n
+If you think you might have found a security impacting issue, please follow our [Security Notification Process.](#security-issue-notifications)
 
-Otherwise, if you think you might have found a security impacting issue, please instead follow [our Security Notification Process.](#security-issue-notifications)
+If you have any questions about submitting PRs, s2n-tls API usage, or something similar, please open an issue.
 
 ## Documentation
 
-s2n-tls uses [Doxygen](https://doxygen.nl/index.html) to document its public API. The latest s2n-tls documentation can be found on [GitHub pages](https://aws.github.io/s2n-tls/doxygen/). The [Usage Guide](docs/USAGE-GUIDE.md) explains how different TLS features can be configured and used.
+s2n-tls uses [Doxygen](https://doxygen.nl/index.html) to document its public API. The latest s2n-tls documentation can be found on [GitHub pages](https://aws.github.io/s2n-tls/doxygen/). The [Usage Guide](https://aws.github.io/s2n-tls/usage-guide/) explains how different TLS features can be configured and used. s2n-tls Rust bindings docs can be found [here](https://docs.rs/s2n-tls/latest/s2n_tls/).
 
 Documentation for older versions or branches of s2n-tls can be generated locally. To generate the documentation, install doxygen and run `doxygen docs/doxygen/Doxyfile`. The doxygen documentation can now be found at `docs/doxygen/output/html/index.html`.
 
 Doxygen installation instructions are available at the [Doxygen](https://doxygen.nl/download.html) webpage.
+
+## Platform Support
+
+We’ve listed the distributions and platforms under two tiers: Tier 1 platforms are guaranteed to build, run, and pass tests in CI. Tier 2 platforms are guaranteed to build and we'll address issues opened against them, but they aren't currently running in our CI and are not actively reviewed with every commit. If you use a platform not listed below and would like to request (or help!) add it to our CI, please open an issue for discussion.
+
+### Tier 1
+
+|Distribution in CI                                     |Platforms        |
+|-------------------------------------------------------|-----------------|
+|Ubuntu18, Ubuntu24**                                   | x86_64          |
+|Ubuntu22                                               | x86_64, i686    |
+|AL2, AL2023**                                          | x86_64, aarch64 |
+|NixOS                                                  | x86_64, aarch64 |
+|OpenBSD [7.4](https://github.com/cross-platform-actions/action/blob/master/readme.md#supported-platforms)| x86_64 |
+|FreeBSD [latest](https://github.com/vmactions/freebsd-vm/blob/v1/conf/default.release.conf)| x86_64  |
+|OSX [latest](https://github.com/actions/runner-images?tab=readme-ov-file#available-images) | aarch64 |
+
+**Work in Progress
+
+### Tier 2
+
+|Distribution not in CI |Platforms|
+|-----------------------|---------|
+| Fedora Core 34-36     | x86_64, aarch64 |
+| Ubuntu14/16/20        | x86_64, aarch64 |
+| Ubuntu18/22/24        | aarch64         |
+| [OSX](https://github.com/actions/runner-images/tree/main/images/macos) 12-14 |x86_64|
+
+These distribution lists are not exhaustive and missing tooling or a missing supported libcrypto library could prevent a successful build.
 
 ## Using s2n-tls
 
@@ -78,7 +106,7 @@ int bytes_written;
 bytes_written = s2n_send(conn, "Hello World", sizeof("Hello World"), &blocked);
 ```
 
-For details on building the s2n-tls library and how to use s2n-tls in an application you are developing, see the [usage guide](https://github.com/aws/s2n-tls/blob/main/docs/USAGE-GUIDE.md).
+For details on building the s2n-tls library and how to use s2n-tls in an application you are developing, see the [Usage Guide](https://aws.github.io/s2n-tls/usage-guide).
 
 ## s2n-tls features
 
@@ -98,8 +126,8 @@ s2n_config_set_cipher_preferences(config, "20150306")
 
 Internally s2n-tls takes a systematic approach to data protection and includes several mechanisms designed to improve safety.
 
-##### Small and auditable code base
-Ignoring tests, blank lines and comments, s2n-tls is about 6,000 lines of code. s2n's code is also structured and written with a focus on reviewability. All s2n-tls code is subject to code review, and we plan to complete security evaluations of s2n-tls on an annual basis.
+##### Auditable code base
+s2n-tls's code is structured and written with a focus on reviewability. All s2n-tls code is subject to code review, and we plan to complete security evaluations of s2n-tls on an annual basis.
 
 To date there have been two external code-level reviews of s2n-tls, including one by a commercial security vendor. s2n-tls has also been shared with some trusted members of the broader cryptography, security, and Open Source communities. Any issues discovered are always recorded in the s2n-tls issue tracker.
 
@@ -111,6 +139,8 @@ In addition to code reviews, s2n-tls is subject to regular static analysis, fuzz
 
 s2n-tls includes positive and negative unit tests and end-to-end test cases.
 
+Unit test coverage can be viewed [here](https://dx1inn44oyl7n.cloudfront.net/main/index.html). Note that this represents unit coverage for a particular build. Since that build won't necessarily support all s2n-tls features, test coverage may be artificially lowered.
+
 ##### Erase on read
 s2n-tls encrypts or erases plaintext data as quickly as possible. For example, decrypted data buffers are erased as they are read by the application.
 
@@ -118,13 +148,13 @@ s2n-tls encrypts or erases plaintext data as quickly as possible. For example, d
 s2n-tls uses operating system features to protect data from being swapped to disk or appearing in core dumps.
 
 ##### Minimalist feature adoption
-s2n-tls avoids implementing rarely used options and extensions, as well as features with a history of triggering protocol-level vulnerabilities. For example there is no support for session renegotiation or DTLS.
+s2n-tls avoids implementing rarely used options and extensions, as well as features with a history of triggering protocol-level vulnerabilities. For example, there is no support for DTLS.
 
 ##### Compartmentalized random number generation
 The security of TLS and its associated encryption algorithms depends upon secure random number generation. s2n-tls provides every thread with two separate random number generators. One for "public" randomly generated data that may appear in the clear, and one for "private" data that should remain secret. This approach lessens the risk of potential predictability weaknesses in random number generation algorithms from leaking information across contexts.
 
 ##### Modularized encryption
-s2n-tls has been structured so that different encryption libraries may be used. Today s2n-tls supports OpenSSL (versions 1.0.2, 1.1.1 and 3.0.x), LibreSSL, BoringSSL, AWS-LC, and the Apple Common Crypto framework to perform the underlying cryptographic operations.
+s2n-tls has been structured so that different encryption libraries may be used. Today s2n-tls supports AWS-LC, OpenSSL (versions 1.0.2, 1.1.1 and 3.0.x), LibreSSL, and BoringSSL to perform the underlying cryptographic operations. Check the [libcrypto build documentation](docs/BUILD.md#building-with-a-specific-libcrypto) for a list of libcrypto-specific features.
 
 ##### Timing blinding
 s2n-tls includes structured support for blinding time-based side-channels that may leak sensitive data. For example, if s2n-tls fails to parse a TLS record or handshake message, s2n-tls will add a randomized delay of between 10 and 30 seconds, granular to nanoseconds, before responding. This raises the complexity of real-world timing side-channel attacks by a factor of at least tens of trillions.

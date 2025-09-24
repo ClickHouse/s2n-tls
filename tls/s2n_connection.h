@@ -23,6 +23,7 @@
 #include "crypto/s2n_hash.h"
 #include "crypto/s2n_hmac.h"
 #include "stuffer/s2n_stuffer.h"
+#include "tls/s2n_async_offload.h"
 #include "tls/s2n_client_hello.h"
 #include "tls/s2n_config.h"
 #include "tls/s2n_crypto.h"
@@ -49,6 +50,9 @@
 
 #define is_handshake_complete(conn) (APPLICATION_DATA == s2n_conn_get_current_message_type(conn))
 
+#define S2N_DEFAULT_BLINDING_MAX 30
+#define S2N_DEFAULT_BLINDING_MIN 10
+
 typedef enum {
     S2N_NO_TICKET = 0,
     S2N_DECRYPT_TICKET,
@@ -67,8 +71,7 @@ struct s2n_connection {
     /* Connection can be used by a QUIC implementation */
     unsigned quic_enabled : 1;
 
-    /* s2n does not support renegotiation.
-     * RFC5746 Section 4.3 suggests servers implement a minimal version of the
+    /* RFC5746 Section 4.3 suggests servers implement a minimal version of the
      * renegotiation_info extension even if renegotiation is not supported.
      * Some clients may fail the handshake if a corresponding renegotiation_info
      * extension is not sent back by the server.
@@ -133,6 +136,18 @@ struct s2n_connection {
     /* Indicates whether the connection should request OCSP stapling from the peer */
     unsigned request_ocsp_status : 1;
 
+    /* Indicates that the connection was created from deserialization
+     * and therefore knowledge of the original handshake is limited. */
+    unsigned deserialized_conn : 1;
+
+    /* Indicates s2n_recv should reduce read calls by attempting to buffer more
+     * data than is required for a single record.
+     *
+     * This is more efficient, but will break applications that expect exact reads,
+     * for example any custom IO that behaves like MSG_WAITALL.
+     */
+    unsigned recv_buffering : 1;
+
     /* The configuration (cert, key .. etc ) */
     struct s2n_config *config;
 
@@ -189,7 +204,6 @@ struct s2n_connection {
     /* The version advertised by the client, by the
      * server, and the actual version we are currently
      * speaking. */
-    uint8_t client_hello_version;
     uint8_t client_protocol_version;
     uint8_t server_protocol_version;
     uint8_t actual_protocol_version;
@@ -224,15 +238,15 @@ struct s2n_connection {
     /* The PRF needs some storage elements to work with */
     struct s2n_prf_working_space *prf_space;
 
-    /* Whether to use client_cert_auth_type stored in s2n_config or in this s2n_connection.
-     *
-     * By default the s2n_connection will defer to s2n_config->client_cert_auth_type on whether or not to use Client Auth.
-     * But users can override Client Auth at the connection level using s2n_connection_set_client_auth_type() without mutating
-     * s2n_config since s2n_config can be shared between multiple s2n_connections. */
+    /* Indicates whether the application has overridden the client auth behavior
+     * inherited from the config.
+     * This should be a bitflag, but that change is blocked on the SAW proofs.
+     */
     uint8_t client_cert_auth_type_overridden;
 
-    /* Whether or not the s2n_connection should require the Client to authenticate itself to the server. Only used if
-     * client_cert_auth_type_overridden is non-zero. */
+    /* Whether or not the client should authenticate itself to the server.
+     * Only used if client_cert_auth_type_overridden is true.
+     */
     s2n_cert_auth_type client_cert_auth_type;
 
     /* Our workhorse stuffers, used for buffering the plaintext
@@ -240,6 +254,7 @@ struct s2n_connection {
      */
     uint8_t header_in_data[S2N_TLS_RECORD_HEADER_LENGTH];
     struct s2n_stuffer header_in;
+    struct s2n_stuffer buffer_in;
     struct s2n_stuffer in;
     struct s2n_stuffer out;
     enum {
@@ -339,6 +354,8 @@ struct s2n_connection {
 
     struct s2n_x509_validator x509_validator;
 
+    struct s2n_async_offload_op async_offload_op;
+
     /* After a connection is created this is the verification function that should always be used. At init time,
      * the config should be checked for a verify callback and each connection should default to that. However,
      * from the user's perspective, it's sometimes simpler to manage state by attaching each validation function/data
@@ -363,6 +380,8 @@ struct s2n_connection {
     /* Cookie extension data */
     struct s2n_blob cookie;
 
+    struct s2n_blob cert_authorities;
+
     /* Flags to prevent users from calling methods recursively.
      * This can be an easy mistake to make when implementing callbacks.
      */
@@ -383,6 +402,10 @@ struct s2n_connection {
      * The writer clears it after a KeyUpdate is sent.
      */
     s2n_atomic_flag key_update_pending;
+
+    /* Track KeyUpdates for metrics */
+    uint8_t send_key_updated;
+    uint8_t recv_key_updated;
 };
 
 S2N_CLEANUP_RESULT s2n_connection_ptr_free(struct s2n_connection **s2n_connection);
@@ -422,3 +445,5 @@ int s2n_connection_get_peer_cert_chain(const struct s2n_connection *conn, struct
 uint8_t s2n_connection_get_protocol_version(const struct s2n_connection *conn);
 S2N_RESULT s2n_connection_set_max_fragment_length(struct s2n_connection *conn, uint16_t length);
 S2N_RESULT s2n_connection_get_secure_cipher(struct s2n_connection *conn, const struct s2n_cipher **cipher);
+S2N_RESULT s2n_connection_get_sequence_number(struct s2n_connection *conn,
+        s2n_mode mode, struct s2n_blob *seq_num);

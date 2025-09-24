@@ -53,14 +53,14 @@ int main(int argc, char **argv)
     uint8_t data[] = "hello";
 
     /**
-     *= https://tools.ietf.org/rfc/rfc8446#section-6
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-6
      *= type=test
      *# Unknown Alert types MUST be treated as error alerts.
      */
     uint8_t test_alert_levels[] = { 0, 1, 2, 3, 10, UINT8_MAX };
 
     /**
-     *= https://tools.ietf.org/rfc/rfc8446#section-6
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-6
      *= type=test
      *# All the alerts listed in Section 6.2 MUST be sent with
      *# AlertLevel=fatal and MUST be treated as error alerts when received
@@ -153,7 +153,7 @@ int main(int argc, char **argv)
                 EXPECT_SUCCESS(s2n_flush(sender, &blocked));
 
                 /**
-                 *= https://tools.ietf.org/rfc/rfc8446#section-6
+                 *= https://www.rfc-editor.org/rfc/rfc8446#section-6
                  *= type=test
                  *# Upon receiving an error alert, the TLS implementation
                  *# SHOULD indicate an error to the application and MUST NOT allow any
@@ -169,7 +169,7 @@ int main(int argc, char **argv)
                 }
 
                 /**
-                 *= https://tools.ietf.org/rfc/rfc8446#section-6.2
+                 *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
                  *= type=test
                  *# Upon transmission or
                  *# receipt of a fatal alert message, both parties MUST immediately close
@@ -178,7 +178,7 @@ int main(int argc, char **argv)
                 EXPECT_TRUE(s2n_connection_check_io_status(receiver, S2N_IO_CLOSED));
 
                 /**
-                 *= https://tools.ietf.org/rfc/rfc8446#section-6.2
+                 *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
                  *= type=test
                  *# The implementation SHOULD provide a way to facilitate logging the sending
                  *# and receiving of alerts.
@@ -270,8 +270,8 @@ int main(int argc, char **argv)
                 case S2N_ERR_CERT_UNTRUSTED:
                     EXPECT_SUCCESS(s2n_connection_set_config(client, untrusted_config));
 
-                    EXPECT_FAILURE_WITH_ERRNO(s2n_negotiate_test_server_and_client(server, client),
-                            S2N_ERR_CERT_UNTRUSTED);
+                    EXPECT_FAILURE_WITH_ALERT(s2n_negotiate_test_server_and_client(server, client),
+                            S2N_ERR_CERT_UNTRUSTED, S2N_TLS_ALERT_CERTIFICATE_UNKNOWN);
 
                     failed_conn = client;
                     closed_conn = server;
@@ -299,7 +299,7 @@ int main(int argc, char **argv)
             EXPECT_TRUE(failed_conn->alert_sent);
 
             /**
-             *= https://tools.ietf.org/rfc/rfc8446#section-6.2
+             *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
              *= type=test
              *# Upon transmission or
              *# receipt of a fatal alert message, both parties MUST immediately close
@@ -308,7 +308,7 @@ int main(int argc, char **argv)
             EXPECT_TRUE(s2n_connection_check_io_status(failed_conn, S2N_IO_CLOSED));
 
             /**
-             *= https://tools.ietf.org/rfc/rfc8446#section-6.2
+             *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
              *= type=test
              *# Whenever an implementation encounters a fatal error condition, it
              *# SHOULD send an appropriate fatal alert
@@ -321,7 +321,7 @@ int main(int argc, char **argv)
             }
             EXPECT_EQUAL(expected_alert, s2n_connection_get_alert(closed_conn));
             /**
-             *= https://tools.ietf.org/rfc/rfc8446#section-6.2
+             *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
              *= type=test
              *# and MUST close the connection
              *# without sending or receiving any additional data.
@@ -334,7 +334,7 @@ int main(int argc, char **argv)
 
     /* Test: Receiving a closure alert
      *
-     *= https://tools.ietf.org/rfc/rfc8446#section-6.1
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-6.1
      *= type=test
      *# Either party MAY initiate a close of its write side of the connection
      *# by sending a "close_notify" alert.  Any data received after a closure
@@ -386,7 +386,7 @@ int main(int argc, char **argv)
             EXPECT_FALSE(s2n_connection_check_io_status(receiver, S2N_IO_READABLE));
 
             /*
-             *= https://tools.ietf.org/rfc/rfc8446#section-6.1
+             *= https://www.rfc-editor.org/rfc/rfc8446#section-6.1
              *= type=test
              *# Any data received after a closure alert has been received MUST be ignored.
              */
@@ -402,7 +402,7 @@ int main(int argc, char **argv)
 
     /* Test: Sending a closure alert
      *
-     *= https://tools.ietf.org/rfc/rfc8446#section-6.1
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-6.1
      *= type=test
      *# Each party MUST send a "close_notify" alert before closing its write
      *# side of the connection, unless it has already sent some error alert.
@@ -441,7 +441,7 @@ int main(int argc, char **argv)
 
         /* Receive close_notify
          *
-         *= https://tools.ietf.org/rfc/rfc8446#section-6
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-6
          *= type=test
          *# The "close_notify" alert is used to indicate orderly closure of one
          *# direction of the connection.  Upon receiving such an alert, the TLS
@@ -467,7 +467,7 @@ int main(int argc, char **argv)
 
     /* Test: Closure alerts in TLS1.2
      *
-     *= https://tools.ietf.org/rfc/rfc8446#section-6.1
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-6.1
      *= type=test
      *# Note that this is a change from versions of TLS prior to TLS 1.3 in
      *# which implementations were required to react to a "close_notify" by
@@ -479,13 +479,13 @@ int main(int argc, char **argv)
                 s2n_connection_ptr_free);
         EXPECT_SUCCESS(s2n_connection_set_blinding(server, S2N_SELF_SERVICE_BLINDING));
         EXPECT_SUCCESS(s2n_connection_set_config(server, config));
-        EXPECT_SUCCESS(s2n_connection_set_cipher_preferences(server, "default"));
+        EXPECT_SUCCESS(s2n_connection_set_cipher_preferences(server, "20240501"));
 
         DEFER_CLEANUP(struct s2n_connection *client = s2n_connection_new(S2N_CLIENT),
                 s2n_connection_ptr_free);
         EXPECT_SUCCESS(s2n_connection_set_blinding(client, S2N_SELF_SERVICE_BLINDING));
         EXPECT_SUCCESS(s2n_connection_set_config(client, config));
-        EXPECT_SUCCESS(s2n_connection_set_cipher_preferences(client, "default"));
+        EXPECT_SUCCESS(s2n_connection_set_cipher_preferences(client, "20240501"));
 
         DEFER_CLEANUP(struct s2n_test_io_stuffer_pair io_pair = { 0 }, s2n_io_stuffer_pair_free);
         EXPECT_OK(s2n_io_stuffer_pair_init(&io_pair));
@@ -525,13 +525,13 @@ int main(int argc, char **argv)
 
     /* Test: End-of-Data
      *
-     *= https://tools.ietf.org/rfc/rfc8446#6.1
+     *= https://www.rfc-editor.org/rfc/rfc8446#6.1
      *= type=test
      *# If a transport-level close
      *# is received prior to a "close_notify", the receiver cannot know that
      *# all the data that was sent has been received.
      *
-     *= https://tools.ietf.org/rfc/rfc8446#6.1
+     *= https://www.rfc-editor.org/rfc/rfc8446#6.1
      *= type=test
      *# If the application protocol using TLS provides that any data may be
      *# carried over the underlying transport after the TLS connection is

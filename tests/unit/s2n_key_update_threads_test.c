@@ -35,7 +35,7 @@
     _##name##_record_alg.encryption_limit = limit;                       \
     name.record_alg = &_##name##_record_alg;
 
-S2N_RESULT s2n_set_key_update_request_for_testing(keyupdate_request request);
+S2N_RESULT s2n_set_key_update_request_for_testing(s2n_peer_key_update request);
 
 static void *s2n_send_random_data(void *arg)
 {
@@ -106,13 +106,7 @@ static S2N_RESULT s2n_send_and_recv_random_data(struct s2n_connection *conn)
 static S2N_RESULT s2n_sanity_check_key_updates_sent(struct s2n_connection *conn)
 {
     struct s2n_blob seq_num_blob = { 0 };
-    if (conn->mode == S2N_CLIENT) {
-        RESULT_GUARD_POSIX(s2n_blob_init(&seq_num_blob, conn->secure->client_sequence_number,
-                sizeof(conn->secure->client_sequence_number)));
-    } else {
-        RESULT_GUARD_POSIX(s2n_blob_init(&seq_num_blob, conn->secure->server_sequence_number,
-                sizeof(conn->secure->server_sequence_number)));
-    }
+    RESULT_GUARD(s2n_connection_get_sequence_number(conn, conn->mode, &seq_num_blob));
 
     uint64_t seq_num = 0;
     RESULT_GUARD_POSIX(s2n_sequence_number_to_uint64(&seq_num_blob, &seq_num));
@@ -182,13 +176,12 @@ static S2N_RESULT s2n_test_peer_requests(struct s2n_connection *conn)
 typedef S2N_RESULT (*s2n_test_scenario)(struct s2n_connection *conn);
 static S2N_RESULT s2n_run_self_talk_test(s2n_test_scenario scenario_fn)
 {
-    DEFER_CLEANUP(struct s2n_cert_chain_and_key *chain_and_key = NULL,
-            s2n_cert_chain_and_key_ptr_free);
+    struct s2n_cert_chain_and_key *chain_and_key = NULL;
     RESULT_GUARD_POSIX(s2n_test_cert_chain_and_key_new(&chain_and_key,
             S2N_DEFAULT_TEST_CERT_CHAIN, S2N_DEFAULT_TEST_PRIVATE_KEY));
 
-    DEFER_CLEANUP(struct s2n_config *config = s2n_config_new(),
-            s2n_config_ptr_free);
+    struct s2n_config *config = s2n_config_new();
+    RESULT_ENSURE_REF(config);
     RESULT_GUARD_POSIX(s2n_config_set_unsafe_for_testing(config));
     RESULT_GUARD_POSIX(s2n_config_set_cipher_preferences(config, "default_tls13"));
     RESULT_GUARD_POSIX(s2n_config_add_cert_chain_and_key_to_store(config, chain_and_key));
@@ -213,6 +206,10 @@ static S2N_RESULT s2n_run_self_talk_test(s2n_test_scenario scenario_fn)
         EXPECT_OK(scenario_fn(client));
 
         EXPECT_SUCCESS(s2n_connection_free(client));
+        EXPECT_SUCCESS(s2n_cert_chain_and_key_free(chain_and_key));
+        EXPECT_SUCCESS(s2n_config_free(config));
+        EXPECT_SUCCESS(s2n_io_pair_close_one_end(&io_pair, S2N_CLIENT));
+
         exit(EXIT_SUCCESS);
     }
 
@@ -233,6 +230,10 @@ static S2N_RESULT s2n_run_self_talk_test(s2n_test_scenario scenario_fn)
         EXPECT_OK(scenario_fn(server));
 
         EXPECT_SUCCESS(s2n_connection_free(server));
+        EXPECT_SUCCESS(s2n_cert_chain_and_key_free(chain_and_key));
+        EXPECT_SUCCESS(s2n_config_free(config));
+        EXPECT_SUCCESS(s2n_io_pair_close_one_end(&io_pair, S2N_SERVER));
+
         exit(EXIT_SUCCESS);
     }
 
@@ -241,6 +242,9 @@ static S2N_RESULT s2n_run_self_talk_test(s2n_test_scenario scenario_fn)
     RESULT_ENSURE_EQ(status, EXIT_SUCCESS);
     RESULT_ENSURE_EQ(waitpid(server_pid, &status, 0), server_pid);
     RESULT_ENSURE_EQ(status, EXIT_SUCCESS);
+
+    EXPECT_SUCCESS(s2n_cert_chain_and_key_free(chain_and_key));
+    EXPECT_SUCCESS(s2n_config_free(config));
 
     return S2N_RESULT_OK;
 }

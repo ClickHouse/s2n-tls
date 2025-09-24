@@ -1,6 +1,8 @@
 name: OpenBSD
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   merge_group:
@@ -9,17 +11,18 @@ on:
 
 jobs:
   testopenbsd:
-    runs-on: macos-12
+    runs-on: ubuntu-latest
     name: CI OpenBSD
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: Build and test in OpenBSD
         id: test
-        uses: cross-platform-actions/action@v0.10.0
+        uses: cross-platform-actions/action@v0.29.0
         with:
           operating_system: openbsd
           architecture: x86-64
-          version: '7.2'
+          version: '7.4'
+          cpu_count: 4
           shell: bash
           run: |
             sudo pkg_add ninja cmake

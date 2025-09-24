@@ -92,7 +92,7 @@ static int s2n_mem_malloc_mlock_impl(void **ptr, uint32_t requested, uint32_t *a
     POSIX_ENSURE_REF(ptr);
 
     /* Page aligned allocation required for mlock */
-    uint32_t allocate;
+    uint32_t allocate = 0;
 
     POSIX_GUARD(s2n_align_to(requested, page_size, &allocate));
 
@@ -135,18 +135,41 @@ int s2n_mem_set_callbacks(s2n_mem_init_callback mem_init_callback, s2n_mem_clean
         s2n_mem_malloc_callback mem_malloc_callback, s2n_mem_free_callback mem_free_callback)
 {
     POSIX_ENSURE(!initialized, S2N_ERR_INITIALIZED);
+    POSIX_GUARD_RESULT(s2n_mem_override_callbacks(mem_init_callback, mem_cleanup_callback,
+            mem_malloc_callback, mem_free_callback));
+    return S2N_SUCCESS;
+}
 
-    POSIX_ENSURE_REF(mem_init_callback);
-    POSIX_ENSURE_REF(mem_cleanup_callback);
-    POSIX_ENSURE_REF(mem_malloc_callback);
-    POSIX_ENSURE_REF(mem_free_callback);
+S2N_RESULT s2n_mem_override_callbacks(s2n_mem_init_callback mem_init_callback, s2n_mem_cleanup_callback mem_cleanup_callback,
+        s2n_mem_malloc_callback mem_malloc_callback, s2n_mem_free_callback mem_free_callback)
+{
+    RESULT_ENSURE_REF(mem_init_callback);
+    RESULT_ENSURE_REF(mem_cleanup_callback);
+    RESULT_ENSURE_REF(mem_malloc_callback);
+    RESULT_ENSURE_REF(mem_free_callback);
 
     s2n_mem_init_cb = mem_init_callback;
     s2n_mem_cleanup_cb = mem_cleanup_callback;
     s2n_mem_malloc_cb = mem_malloc_callback;
     s2n_mem_free_cb = mem_free_callback;
 
-    return S2N_SUCCESS;
+    return S2N_RESULT_OK;
+}
+
+S2N_RESULT s2n_mem_get_callbacks(s2n_mem_init_callback *mem_init_callback, s2n_mem_cleanup_callback *mem_cleanup_callback,
+        s2n_mem_malloc_callback *mem_malloc_callback, s2n_mem_free_callback *mem_free_callback)
+{
+    RESULT_ENSURE_REF(mem_init_callback);
+    RESULT_ENSURE_REF(mem_cleanup_callback);
+    RESULT_ENSURE_REF(mem_malloc_callback);
+    RESULT_ENSURE_REF(mem_free_callback);
+
+    *mem_init_callback = s2n_mem_init_cb;
+    *mem_cleanup_callback = s2n_mem_cleanup_cb;
+    *mem_malloc_callback = s2n_mem_malloc_cb;
+    *mem_free_callback = s2n_mem_free_cb;
+
+    return S2N_RESULT_OK;
 }
 
 int s2n_alloc(struct s2n_blob *b, uint32_t size)

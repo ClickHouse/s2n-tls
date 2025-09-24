@@ -44,44 +44,41 @@ int s2n_server_key_recv(struct s2n_connection *conn)
     struct s2n_stuffer *in = &conn->handshake.io;
     struct s2n_blob data_to_verify = { 0 };
 
-    /* Read the KEX data */
-    struct s2n_kex_raw_server_data kex_data = { 0 };
-    POSIX_GUARD_RESULT(s2n_kex_server_key_recv_read_data(key_exchange, conn, &data_to_verify, &kex_data));
+    S2N_ASYNC_OFFLOAD_POSIX_GUARD(conn, {
+        /* Read the KEX data */
+        struct s2n_kex_raw_server_data kex_data = { 0 };
+        POSIX_GUARD_RESULT(s2n_kex_server_key_recv_read_data(key_exchange, conn, &data_to_verify, &kex_data));
 
-    POSIX_GUARD_RESULT(s2n_signature_algorithm_recv(conn, in));
-    const struct s2n_signature_scheme *active_sig_scheme = conn->handshake_params.server_cert_sig_scheme;
-    POSIX_ENSURE_REF(active_sig_scheme);
+        /* Parse the KEX data into whatever form needed and save it to the connection object */
+        POSIX_GUARD_RESULT(s2n_kex_server_key_recv_parse_data(key_exchange, conn, &kex_data));
 
-    /* FIPS specifically allows MD5 for <TLS1.2 */
-    if (s2n_is_in_fips_mode() && conn->actual_protocol_version < S2N_TLS12) {
-        POSIX_GUARD(s2n_hash_allow_md5_for_fips(signature_hash));
-    }
+        POSIX_GUARD_RESULT(s2n_signature_algorithm_recv(conn, in));
+        const struct s2n_signature_scheme *active_sig_scheme = conn->handshake_params.server_cert_sig_scheme;
+        POSIX_ENSURE_REF(active_sig_scheme);
 
-    POSIX_GUARD(s2n_hash_init(signature_hash, active_sig_scheme->hash_alg));
-    POSIX_GUARD(s2n_hash_update(signature_hash, conn->handshake_params.client_random, S2N_TLS_RANDOM_DATA_LEN));
-    POSIX_GUARD(s2n_hash_update(signature_hash, conn->handshake_params.server_random, S2N_TLS_RANDOM_DATA_LEN));
+        POSIX_GUARD(s2n_hash_init(signature_hash, active_sig_scheme->hash_alg));
+        POSIX_GUARD(s2n_hash_update(signature_hash, conn->handshake_params.client_random, S2N_TLS_RANDOM_DATA_LEN));
+        POSIX_GUARD(s2n_hash_update(signature_hash, conn->handshake_params.server_random, S2N_TLS_RANDOM_DATA_LEN));
 
-    /* Add KEX specific data */
-    POSIX_GUARD(s2n_hash_update(signature_hash, data_to_verify.data, data_to_verify.size));
+        /* Add KEX specific data */
+        POSIX_GUARD(s2n_hash_update(signature_hash, data_to_verify.data, data_to_verify.size));
 
-    /* Verify the signature */
-    uint16_t signature_length;
-    POSIX_GUARD(s2n_stuffer_read_uint16(in, &signature_length));
+        /* Verify the signature */
+        uint16_t signature_length = 0;
+        POSIX_GUARD(s2n_stuffer_read_uint16(in, &signature_length));
 
-    struct s2n_blob signature = { 0 };
-    POSIX_GUARD(s2n_blob_init(&signature, s2n_stuffer_raw_read(in, signature_length), signature_length));
+        struct s2n_blob signature = { 0 };
+        POSIX_GUARD(s2n_blob_init(&signature, s2n_stuffer_raw_read(in, signature_length), signature_length));
 
-    POSIX_ENSURE_REF(signature.data);
-    POSIX_ENSURE_GT(signature_length, 0);
+        POSIX_ENSURE_REF(signature.data);
+        POSIX_ENSURE_GT(signature_length, 0);
 
-    S2N_ERROR_IF(s2n_pkey_verify(&conn->handshake_params.server_public_key, active_sig_scheme->sig_alg, signature_hash, &signature) < 0,
-            S2N_ERR_BAD_MESSAGE);
+        POSIX_GUARD(s2n_async_pkey_verify(conn, active_sig_scheme->sig_alg, signature_hash, &signature));
+    });
 
     /* We don't need the key any more, so free it */
     POSIX_GUARD(s2n_pkey_free(&conn->handshake_params.server_public_key));
 
-    /* Parse the KEX data into whatever form needed and save it to the connection object */
-    POSIX_GUARD_RESULT(s2n_kex_server_key_recv_parse_data(key_exchange, conn, &kex_data));
     return 0;
 }
 
@@ -107,9 +104,9 @@ int s2n_dhe_server_key_recv_read_data(struct s2n_connection *conn, struct s2n_bl
     struct s2n_stuffer *in = &conn->handshake.io;
     struct s2n_dhe_raw_server_points *dhe_data = &raw_server_data->dhe_data;
 
-    uint16_t p_length;
-    uint16_t g_length;
-    uint16_t Ys_length;
+    uint16_t p_length = 0;
+    uint16_t g_length = 0;
+    uint16_t Ys_length = 0;
 
     /* Keep a copy to the start of the whole structure for the signature check */
     data_to_verify->data = s2n_stuffer_raw_read(in, 0);
@@ -162,7 +159,7 @@ int s2n_kem_server_key_recv_read_data(struct s2n_connection *conn, struct s2n_bl
 
     struct s2n_stuffer kem_id_stuffer = { 0 };
     uint8_t kem_id_arr[2];
-    kem_extension_size kem_id;
+    kem_extension_size kem_id = 0;
     struct s2n_blob kem_id_blob = { 0 };
     POSIX_GUARD(s2n_blob_init(&kem_id_blob, kem_id_arr, s2n_array_len(kem_id_arr)));
     POSIX_GUARD(s2n_stuffer_init(&kem_id_stuffer, &kem_id_blob));
@@ -265,11 +262,6 @@ int s2n_server_key_send(struct s2n_connection *conn)
     /* Add common signature data */
     if (conn->actual_protocol_version == S2N_TLS12) {
         POSIX_GUARD(s2n_stuffer_write_uint16(out, sig_scheme->iana_value));
-    }
-
-    /* FIPS specifically allows MD5 for <TLS1.2 */
-    if (s2n_is_in_fips_mode() && conn->actual_protocol_version < S2N_TLS12) {
-        POSIX_GUARD(s2n_hash_allow_md5_for_fips(signature_hash));
     }
 
     /* Add the random data to the hash */

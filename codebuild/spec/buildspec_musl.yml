@@ -23,7 +23,7 @@ phases:
     on-failure: ABORT
     commands:
       # Install musl libc
-      - git clone https://git.musl-libc.org/git/musl $MUSL_DIR
+      - git clone --depth=1 https://git.musl-libc.org/git/musl $MUSL_DIR
       - echo "Installing musl to $CODEBUILD_SRC_DIR/$MUSL_DIR"
       - cd $MUSL_DIR
       - ./configure --prefix=$CODEBUILD_SRC_DIR/$MUSL_DIR
@@ -33,7 +33,7 @@ phases:
       # We need to modify the usual install so that the library can link to musl.
       # If this becomes a problem, we can switch to more official cross compilation.
       - CFLAGS="-U_FORTIFY_SOURCE -D_FILE_OFFSET_BITS=32"
-      - ./codebuild/bin/install_awslc.sh $(mktemp -d) $CODEBUILD_SRC_DIR/$LIBCRYPTO_DIR 0
+      - ./codebuild/bin/install_awslc.sh $(mktemp -d) $CODEBUILD_SRC_DIR/$LIBCRYPTO_DIR
   build:
     on-failure: ABORT
     commands:

@@ -54,7 +54,7 @@ int s2n_client_psk_is_missing(struct s2n_connection *conn)
     /* If the PSK extension is missing, we must not have received
      * a request for early data.
      *
-     *= https://tools.ietf.org/rfc/rfc8446#section-4.2.10
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.10
      *# When a PSK is used and early data is allowed for that PSK, the client
      *# can send Application Data in its first flight of messages.  If the
      *# client opts to do so, it MUST supply both the "pre_shared_key" and
@@ -92,7 +92,7 @@ bool s2n_client_psk_should_send(struct s2n_connection *conn)
 }
 
 /**
- *= https://tools.ietf.org/rfc/rfc8446#section-4.2.11.1
+ *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.11.1
  *# The "obfuscated_ticket_age"
  *# field of each PskIdentity contains an obfuscated version of the
  *# ticket age formed by taking the age in milliseconds and adding the
@@ -105,7 +105,7 @@ static S2N_RESULT s2n_generate_obfuscated_ticket_age(struct s2n_psk *psk, uint64
     RESULT_ENSURE_MUT(output);
 
     /**
-     *= https://tools.ietf.org/rfc/rfc8446#section-4.2.11
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.11
      *# For identities
      *# established externally, an obfuscated_ticket_age of 0 SHOULD be
      *# used,
@@ -150,7 +150,7 @@ static int s2n_client_psk_send(struct s2n_connection *conn, struct s2n_stuffer *
         POSIX_ENSURE_REF(psk);
 
         /**
-         *= https://tools.ietf.org/rfc/rfc8446#section-4.1.4
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-4.1.4
          *# In addition, in its updated ClientHello, the client SHOULD NOT offer
          *# any pre-shared keys associated with a hash other than that of the
          *# selected cipher suite.
@@ -288,7 +288,7 @@ static S2N_RESULT s2n_client_psk_recv_binder_list(struct s2n_connection *conn, s
         uint8_t wire_binder_size = 0;
         RESULT_GUARD_POSIX(s2n_stuffer_read_uint8(wire_binders_in, &wire_binder_size));
 
-        uint8_t *wire_binder_data;
+        uint8_t *wire_binder_data = NULL;
         RESULT_ENSURE_REF(wire_binder_data = s2n_stuffer_raw_read(wire_binders_in, wire_binder_size));
 
         struct s2n_blob wire_binder = { 0 };
@@ -311,7 +311,7 @@ static S2N_RESULT s2n_client_psk_recv_identities(struct s2n_connection *conn, st
     uint16_t identity_list_size = 0;
     RESULT_GUARD_POSIX(s2n_stuffer_read_uint16(extension, &identity_list_size));
 
-    uint8_t *identity_list_data;
+    uint8_t *identity_list_data = NULL;
     RESULT_ENSURE_REF(identity_list_data = s2n_stuffer_raw_read(extension, identity_list_size));
 
     struct s2n_blob identity_list_blob = { 0 };
@@ -331,7 +331,7 @@ static S2N_RESULT s2n_client_psk_recv_binders(struct s2n_connection *conn, struc
     uint16_t binder_list_size = 0;
     RESULT_GUARD_POSIX(s2n_stuffer_read_uint16(extension, &binder_list_size));
 
-    uint8_t *binder_list_data;
+    uint8_t *binder_list_data = NULL;
     RESULT_ENSURE_REF(binder_list_data = s2n_stuffer_raw_read(extension, binder_list_size));
 
     struct s2n_blob binder_list_blob = { 0 };
@@ -358,13 +358,13 @@ int s2n_client_psk_recv(struct s2n_connection *conn, struct s2n_stuffer *extensi
     POSIX_ENSURE_REF(conn);
 
     /**
-     *= https://tools.ietf.org/rfc/rfc8446#section-4.2.11
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.11
      *# The "pre_shared_key" extension MUST be the last extension in the
      *# ClientHello (this facilitates implementation as described below).
      *# Servers MUST check that it is the last extension and otherwise fail
      *# the handshake with an "illegal_parameter" alert.
      */
-    s2n_extension_type_id psk_ext_id;
+    s2n_extension_type_id psk_ext_id = 0;
     POSIX_GUARD(s2n_extension_supported_iana_value_to_id(TLS_EXTENSION_PRE_SHARED_KEY, &psk_ext_id));
     POSIX_ENSURE_NE(conn->client_hello.extensions.count, 0);
     uint16_t last_wire_index = conn->client_hello.extensions.count - 1;
@@ -372,19 +372,19 @@ int s2n_client_psk_recv(struct s2n_connection *conn, struct s2n_stuffer *extensi
     POSIX_ENSURE(extension_wire_index == last_wire_index, S2N_ERR_UNSUPPORTED_EXTENSION);
 
     /**
-     *= https://tools.ietf.org/rfc/rfc8446#section-4.2.9
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.9
      *# If clients offer "pre_shared_key" without a "psk_key_exchange_modes" extension,
      *# servers MUST abort the handshake.
      *
      * We can safely do this check here because s2n_client_psk is
      * required to be the last extension sent in the list.
      */
-    s2n_extension_type_id psk_ke_mode_ext_id;
+    s2n_extension_type_id psk_ke_mode_ext_id = 0;
     POSIX_GUARD(s2n_extension_supported_iana_value_to_id(TLS_EXTENSION_PSK_KEY_EXCHANGE_MODES, &psk_ke_mode_ext_id));
     POSIX_ENSURE(S2N_CBIT_TEST(conn->extension_requests_received, psk_ke_mode_ext_id), S2N_ERR_MISSING_EXTENSION);
 
     if (conn->psk_params.psk_ke_mode == S2N_PSK_DHE_KE) {
-        s2n_extension_type_id key_share_ext_id;
+        s2n_extension_type_id key_share_ext_id = 0;
         POSIX_GUARD(s2n_extension_supported_iana_value_to_id(TLS_EXTENSION_KEY_SHARE, &key_share_ext_id));
         /* A key_share extension must have been received in order to use a pre-shared key
          * in (EC)DHE key exchange mode.
@@ -399,7 +399,7 @@ int s2n_client_psk_recv(struct s2n_connection *conn, struct s2n_stuffer *extensi
 
     if (s2n_result_is_error(s2n_client_psk_recv_identities(conn, extension))) {
         /**
-         *= https://tools.ietf.org/rfc/rfc8446#section-4.2.11
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.11
          *# If no acceptable PSKs are found, the server SHOULD perform a non-PSK
          *# handshake if possible.
          */
@@ -408,7 +408,7 @@ int s2n_client_psk_recv(struct s2n_connection *conn, struct s2n_stuffer *extensi
 
     if (conn->psk_params.chosen_psk) {
         /**
-         *= https://tools.ietf.org/rfc/rfc8446#section-4.2.11
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-4.2.11
          *# Prior to accepting PSK key establishment, the server MUST validate
          *# the corresponding binder value (see Section 4.2.11.2 below).  If this
          *# value is not present or does not validate, the server MUST abort the

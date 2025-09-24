@@ -42,6 +42,8 @@ static S2N_RESULT s2n_translate_protocol_error_to_alert(int error_code, uint8_t 
 
     switch (error_code) {
         S2N_ALERT_CASE(S2N_ERR_MISSING_EXTENSION, S2N_TLS_ALERT_MISSING_EXTENSION);
+        S2N_ALERT_CASE(S2N_ERR_NO_VALID_SIGNATURE_SCHEME, S2N_TLS_ALERT_HANDSHAKE_FAILURE);
+        S2N_ALERT_CASE(S2N_ERR_MISSING_CLIENT_CERT, S2N_TLS_ALERT_CERTIFICATE_REQUIRED);
 
         /* TODO: The ERR_BAD_MESSAGE -> ALERT_UNEXPECTED_MESSAGE mapping
          * isn't always correct. Sometimes s2n-tls uses ERR_BAD_MESSAGE
@@ -50,14 +52,65 @@ static S2N_RESULT s2n_translate_protocol_error_to_alert(int error_code, uint8_t 
          * our errors should be equally or more specific than alerts, not less.
          */
         S2N_ALERT_CASE(S2N_ERR_BAD_MESSAGE, S2N_TLS_ALERT_UNEXPECTED_MESSAGE);
+        S2N_ALERT_CASE(S2N_ERR_UNEXPECTED_CERT_REQUEST, S2N_TLS_ALERT_UNEXPECTED_MESSAGE);
+        S2N_ALERT_CASE(S2N_ERR_MISSING_CERT_REQUEST, S2N_TLS_ALERT_UNEXPECTED_MESSAGE);
 
         /* For errors involving secure renegotiation:
-         *= https://tools.ietf.org/rfc/rfc5746#3.4
+         *= https://www.rfc-editor.org/rfc/rfc5746#3.4
          *# Note: later in Section 3, "abort the handshake" is used as
          *# shorthand for "send a fatal handshake_failure alert and
          *# terminate the connection".
          */
         S2N_ALERT_CASE(S2N_ERR_NO_RENEGOTIATION, S2N_TLS_ALERT_HANDSHAKE_FAILURE);
+
+        S2N_ALERT_CASE(S2N_ERR_KTLS_KEYUPDATE, S2N_TLS_ALERT_UNEXPECTED_MESSAGE);
+
+        /* For errors involving certificates */
+
+        /* This error is used in several ways so make it a general certificate issue
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
+         *# certificate_unknown:  Some other (unspecified) issue arose in
+         *#    processing the certificate, rendering it unacceptable.
+         */
+        S2N_ALERT_CASE(S2N_ERR_CERT_UNTRUSTED, S2N_TLS_ALERT_CERTIFICATE_UNKNOWN);
+        S2N_ALERT_CASE(S2N_ERR_CERT_UNHANDLED_CRITICAL_EXTENSION, S2N_TLS_ALERT_CERTIFICATE_UNKNOWN);
+
+        /*
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
+         *# certificate_revoked:  A certificate was revoked by its signer.
+         */
+        S2N_ALERT_CASE(S2N_ERR_CERT_REVOKED, S2N_TLS_ALERT_CERTIFICATE_REVOKED);
+
+        /*
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
+         *# certificate_expired:  A certificate has expired or is not currently
+         *#    valid.
+         */
+        S2N_ALERT_CASE(S2N_ERR_CERT_NOT_YET_VALID, S2N_TLS_ALERT_CERTIFICATE_EXPIRED);
+        S2N_ALERT_CASE(S2N_ERR_CERT_EXPIRED, S2N_TLS_ALERT_CERTIFICATE_EXPIRED);
+
+        /*
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
+         *# unsupported_certificate:  A certificate was of an unsupported type.
+         */
+        S2N_ALERT_CASE(S2N_ERR_CERT_TYPE_UNSUPPORTED, S2N_TLS_ALERT_UNSUPPORTED_CERTIFICATE);
+
+        /*
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
+         *# access_denied:  A valid certificate or PSK was received, but when
+         *#    access control was applied, the sender decided not to proceed with
+         *#    negotiation.
+         */
+        S2N_ALERT_CASE(S2N_ERR_CERT_REJECTED, S2N_TLS_ALERT_ACCESS_DENIED);
+
+        /*
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
+         *# bad_certificate:  A certificate was corrupt, contained signatures
+         *#    that did not verify correctly, etc.
+         */
+        S2N_ALERT_CASE(S2N_ERR_CERT_MAX_CHAIN_DEPTH_EXCEEDED, S2N_TLS_ALERT_BAD_CERTIFICATE);
+        S2N_ALERT_CASE(S2N_ERR_CERT_INVALID, S2N_TLS_ALERT_BAD_CERTIFICATE);
+        S2N_ALERT_CASE(S2N_ERR_DECODE_CERTIFICATE, S2N_TLS_ALERT_BAD_CERTIFICATE);
 
         /* TODO: Add mappings for other protocol errors.
          */
@@ -81,7 +134,6 @@ static S2N_RESULT s2n_translate_protocol_error_to_alert(int error_code, uint8_t 
         S2N_NO_ALERT(S2N_ERR_HASH_WIPE_FAILED);
         S2N_NO_ALERT(S2N_ERR_HASH_NOT_READY);
         S2N_NO_ALERT(S2N_ERR_ALLOW_MD5_FOR_FIPS_FAILED);
-        S2N_NO_ALERT(S2N_ERR_DECODE_CERTIFICATE);
         S2N_NO_ALERT(S2N_ERR_DECODE_PRIVATE_KEY);
         S2N_NO_ALERT(S2N_ERR_INVALID_HELLO_RETRY);
         S2N_NO_ALERT(S2N_ERR_INVALID_SIGNATURE_ALGORITHM);
@@ -93,6 +145,8 @@ static S2N_RESULT s2n_translate_protocol_error_to_alert(int error_code, uint8_t 
         S2N_NO_ALERT(S2N_ERR_ECDHE_GEN_KEY);
         S2N_NO_ALERT(S2N_ERR_ECDHE_SHARED_SECRET);
         S2N_NO_ALERT(S2N_ERR_ECDHE_UNSUPPORTED_CURVE);
+        S2N_NO_ALERT(S2N_ERR_ECDHE_INVALID_PUBLIC_KEY);
+        S2N_NO_ALERT(S2N_ERR_ECDHE_INVALID_PUBLIC_KEY_FIPS);
         S2N_NO_ALERT(S2N_ERR_ECDSA_UNSUPPORTED_CURVE);
         S2N_NO_ALERT(S2N_ERR_ECDHE_SERIALIZING);
         S2N_NO_ALERT(S2N_ERR_KEM_UNSUPPORTED_PARAMS);
@@ -100,14 +154,6 @@ static S2N_RESULT s2n_translate_protocol_error_to_alert(int error_code, uint8_t 
         S2N_NO_ALERT(S2N_ERR_SHUTDOWN_CLOSED);
         S2N_NO_ALERT(S2N_ERR_NON_EMPTY_RENEGOTIATION_INFO);
         S2N_NO_ALERT(S2N_ERR_RECORD_LIMIT);
-        S2N_NO_ALERT(S2N_ERR_CERT_UNTRUSTED);
-        S2N_NO_ALERT(S2N_ERR_CERT_REVOKED);
-        S2N_NO_ALERT(S2N_ERR_CERT_NOT_YET_VALID);
-        S2N_NO_ALERT(S2N_ERR_CERT_EXPIRED);
-        S2N_NO_ALERT(S2N_ERR_CERT_TYPE_UNSUPPORTED);
-        S2N_NO_ALERT(S2N_ERR_CERT_INVALID);
-        S2N_NO_ALERT(S2N_ERR_CERT_MAX_CHAIN_DEPTH_EXCEEDED);
-        S2N_NO_ALERT(S2N_ERR_CERT_REJECTED);
         S2N_NO_ALERT(S2N_ERR_CRL_LOOKUP_FAILED);
         S2N_NO_ALERT(S2N_ERR_CRL_SIGNATURE);
         S2N_NO_ALERT(S2N_ERR_CRL_ISSUER);
@@ -144,7 +190,7 @@ static bool s2n_alerts_supported(struct s2n_connection *conn)
 }
 
 /* In TLS1.3 all Alerts
- *= https://tools.ietf.org/rfc/rfc8446#section-6
+ *= https://www.rfc-editor.org/rfc/rfc8446#section-6
  *# MUST be treated as error alerts when received
  *# regardless of the AlertLevel in the message.
  */
@@ -229,7 +275,7 @@ int s2n_process_alert_fragment(struct s2n_connection *conn)
 
             /* All other alerts are treated as fatal errors.
              *
-             *= https://tools.ietf.org/rfc/rfc8446#section-6
+             *= https://www.rfc-editor.org/rfc/rfc8446#section-6
              *# Unknown Alert types MUST be treated as error alerts.
              */
             POSIX_GUARD_RESULT(s2n_connection_set_closed(conn));
@@ -265,7 +311,7 @@ int s2n_queue_reader_handshake_failure_alert(struct s2n_connection *conn)
 S2N_RESULT s2n_queue_reader_no_renegotiation_alert(struct s2n_connection *conn)
 {
     /**
-     *= https://tools.ietf.org/rfc/rfc5746#4.5
+     *= https://www.rfc-editor.org/rfc/rfc5746#4.5
      *# SSLv3 does not define the "no_renegotiation" alert (and does
      *# not offer a way to indicate a refusal to renegotiate at a "warning"
      *# level).  SSLv3 clients that refuse renegotiation SHOULD use a fatal
@@ -289,7 +335,7 @@ S2N_RESULT s2n_alerts_write_error_or_close_notify(struct s2n_connection *conn)
     }
 
     /*
-     *= https://tools.ietf.org/rfc/rfc8446#section-6.2
+     *= https://www.rfc-editor.org/rfc/rfc8446#section-6.2
      *= type=exception
      *= reason=Specific alerts could expose a side-channel attack vector.
      *# The phrases "terminate the connection with an X

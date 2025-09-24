@@ -82,15 +82,15 @@ int main(int argc, char **argv)
             /* Move stuffer write cursor to correct position */
             EXPECT_SUCCESS(s2n_stuffer_skip_write(&key_update_stuffer, S2N_KEY_UPDATE_MESSAGE_SIZE));
 
-            uint8_t post_handshake_id;
+            uint8_t post_handshake_id = 0;
             EXPECT_SUCCESS(s2n_stuffer_read_uint8(&key_update_stuffer, &post_handshake_id));
             EXPECT_EQUAL(post_handshake_id, TLS_KEY_UPDATE);
 
-            uint32_t request_length;
+            uint32_t request_length = 0;
             EXPECT_SUCCESS(s2n_stuffer_read_uint24(&key_update_stuffer, &request_length));
             EXPECT_EQUAL(request_length, S2N_KEY_UPDATE_LENGTH);
 
-            uint8_t key_update_request;
+            uint8_t key_update_request = 0;
             EXPECT_SUCCESS(s2n_stuffer_read_uint8(&key_update_stuffer, &key_update_request));
             EXPECT_EQUAL(key_update_request, S2N_KEY_UPDATE_NOT_REQUESTED);
         };
@@ -100,7 +100,7 @@ int main(int argc, char **argv)
     {
         /* Key update message not allowed when running with QUIC
          *
-         *= https://tools.ietf.org/rfc/rfc9001.txt#6
+         *= https://www.rfc-editor.org/rfc/rfc9001#6
          *= type=test
          *# Endpoints MUST treat the receipt of a TLS KeyUpdate message as a connection error
          *# of type 0x010a, equivalent to a fatal TLS alert of unexpected_message
@@ -111,11 +111,11 @@ int main(int argc, char **argv)
             EXPECT_SUCCESS(s2n_stuffer_alloc(&input, test_data_len));
             EXPECT_SUCCESS(s2n_stuffer_skip_write(&input, test_data_len));
 
-            struct s2n_config *quic_config;
+            struct s2n_config *quic_config = NULL;
             EXPECT_NOT_NULL(quic_config = s2n_config_new());
             EXPECT_SUCCESS(s2n_config_enable_quic(quic_config));
 
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_SERVER));
             EXPECT_SUCCESS(s2n_connection_set_config(conn, quic_config));
 
@@ -136,7 +136,7 @@ int main(int argc, char **argv)
             EXPECT_SUCCESS(s2n_stuffer_alloc(&input, test_data_len));
             EXPECT_SUCCESS(s2n_stuffer_skip_write(&input, test_data_len));
 
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_SERVER));
             conn->actual_protocol_version = S2N_TLS12;
 
@@ -148,12 +148,52 @@ int main(int argc, char **argv)
             EXPECT_SUCCESS(s2n_connection_free(conn));
         };
 
+        /* Key update messages not allowed with ktls */
+        {
+            DEFER_CLEANUP(struct s2n_stuffer input, s2n_stuffer_free);
+            EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&input, 0));
+
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_SERVER),
+                    s2n_connection_ptr_free);
+            EXPECT_NOT_NULL(conn);
+            conn->actual_protocol_version = S2N_TLS13;
+            EXPECT_NOT_NULL(conn->secure);
+            conn->secure->cipher_suite = &s2n_tls13_aes_256_gcm_sha384;
+
+            /* Fails if receiving with ktls:
+             * Kernel key update would be required.
+             */
+            conn->ktls_send_enabled = true;
+            conn->ktls_recv_enabled = true;
+            EXPECT_SUCCESS(s2n_stuffer_write_uint8(&input, S2N_KEY_UPDATE_NOT_REQUESTED));
+            EXPECT_FAILURE_WITH_ERRNO(s2n_key_update_recv(conn, &input), S2N_ERR_KTLS_KEYUPDATE);
+            EXPECT_SUCCESS(s2n_stuffer_wipe(&input));
+
+            /* Fails if only sending with ktls, but peer requested an update:
+             * Kernel key update would be required.
+             */
+            conn->ktls_send_enabled = true;
+            conn->ktls_recv_enabled = false;
+            EXPECT_SUCCESS(s2n_stuffer_write_uint8(&input, S2N_KEY_UPDATE_REQUESTED));
+            EXPECT_FAILURE_WITH_ERRNO(s2n_key_update_recv(conn, &input), S2N_ERR_KTLS_KEYUPDATE);
+            EXPECT_EQUAL(s2n_stuffer_data_available(&input), 0);
+
+            /* Succeeds if only sending with ktls and no update requested:
+             * No kernel key update would be required.
+             */
+            conn->ktls_send_enabled = true;
+            conn->ktls_recv_enabled = false;
+            EXPECT_SUCCESS(s2n_stuffer_write_uint8(&input, S2N_KEY_UPDATE_NOT_REQUESTED));
+            EXPECT_SUCCESS(s2n_key_update_recv(conn, &input));
+            EXPECT_EQUAL(s2n_stuffer_data_available(&input), 0);
+        };
+
         /* Key update message received contains invalid key update request */
         {
             DEFER_CLEANUP(struct s2n_stuffer input, s2n_stuffer_free);
             EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&input, 0));
 
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_SERVER));
             /* Write invalid value for key update request type */
             EXPECT_SUCCESS(s2n_stuffer_write_uint8(&input, -1));
@@ -168,7 +208,7 @@ int main(int argc, char **argv)
             DEFER_CLEANUP(struct s2n_stuffer input, s2n_stuffer_free);
             EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&input, 0));
 
-            struct s2n_connection *server_conn;
+            struct s2n_connection *server_conn = NULL;
             EXPECT_NOT_NULL(server_conn = s2n_connection_new(S2N_SERVER));
             server_conn->actual_protocol_version = S2N_TLS13;
             server_conn->secure->cipher_suite = cipher_suite_with_limit;
@@ -181,6 +221,7 @@ int main(int argc, char **argv)
             EXPECT_SUCCESS(s2n_key_update_recv(server_conn, &input));
             EXPECT_EQUAL(server_conn->secure->client_sequence_number[0], 0);
             EXPECT_FALSE(s2n_atomic_flag_test(&server_conn->key_update_pending));
+            EXPECT_EQUAL(server_conn->recv_key_updated, 1);
 
             EXPECT_SUCCESS(s2n_connection_free(server_conn));
         };
@@ -190,7 +231,7 @@ int main(int argc, char **argv)
             DEFER_CLEANUP(struct s2n_stuffer input, s2n_stuffer_free);
             EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&input, 0));
 
-            struct s2n_connection *client_conn;
+            struct s2n_connection *client_conn = NULL;
             EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_with_limit;
@@ -203,6 +244,7 @@ int main(int argc, char **argv)
             EXPECT_SUCCESS(s2n_key_update_recv(client_conn, &input));
             EXPECT_EQUAL(client_conn->secure->server_sequence_number[0], 0);
             EXPECT_FALSE(s2n_atomic_flag_test(&client_conn->key_update_pending));
+            EXPECT_EQUAL(client_conn->recv_key_updated, 1);
 
             EXPECT_SUCCESS(s2n_connection_free(client_conn));
         };
@@ -254,13 +296,33 @@ int main(int argc, char **argv)
             /* KeyUpdate still pending */
             EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
         };
+
+        /* Receiving a KeyUpdate doesn't overflow the key update count */
+        {
+            DEFER_CLEANUP(struct s2n_stuffer input, s2n_stuffer_free);
+            EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&input, 0));
+
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_SERVER),
+                    s2n_connection_ptr_free);
+            EXPECT_NOT_NULL(conn);
+            conn->actual_protocol_version = S2N_TLS13;
+            conn->secure->cipher_suite = cipher_suite_with_limit;
+            conn->recv_key_updated = UINT8_MAX;
+
+            conn->secure->client_sequence_number[0] = 1;
+            EXPECT_SUCCESS(s2n_stuffer_write_uint8(&input, S2N_KEY_UPDATE_NOT_REQUESTED));
+            EXPECT_SUCCESS(s2n_key_update_recv(conn, &input));
+            EXPECT_EQUAL(conn->secure->client_sequence_number[0], 0);
+            EXPECT_EQUAL(conn->recv_key_updated, UINT8_MAX);
+            EXPECT_EQUAL(conn->send_key_updated, 0);
+        };
     };
 
     /* s2n_key_update_send */
     {
         /* Key update has been requested */
         {
-            struct s2n_connection *client_conn;
+            struct s2n_connection *client_conn = NULL;
             EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_with_limit;
@@ -271,7 +333,7 @@ int main(int argc, char **argv)
             EXPECT_SUCCESS(s2n_stuffer_growable_alloc(&stuffer, 0));
             EXPECT_SUCCESS(s2n_connection_set_io_stuffers(&stuffer, &stuffer, client_conn));
 
-            s2n_atomic_flag_set(&client_conn->key_update_pending);
+            EXPECT_SUCCESS(s2n_connection_request_key_update(client_conn, S2N_KEY_UPDATE_NOT_REQUESTED));
 
             s2n_blocked_status blocked = 0;
             EXPECT_SUCCESS(s2n_key_update_send(client_conn, &blocked));
@@ -279,6 +341,7 @@ int main(int argc, char **argv)
             EXPECT_EQUAL(s2n_atomic_flag_test(&client_conn->key_update_pending), false);
             EXPECT_BYTEARRAY_EQUAL(client_conn->secure->client_sequence_number, zeroed_sequence_number, S2N_TLS_SEQUENCE_NUM_LEN);
             EXPECT_TRUE(s2n_stuffer_data_available(&stuffer) > 0);
+            EXPECT_EQUAL(client_conn->send_key_updated, 1);
 
             EXPECT_SUCCESS(s2n_stuffer_free(&stuffer));
             EXPECT_SUCCESS(s2n_connection_free(client_conn));
@@ -286,7 +349,7 @@ int main(int argc, char **argv)
 
         /* Key update is triggered by encryption limits */
         {
-            struct s2n_connection *client_conn;
+            struct s2n_connection *client_conn = NULL;
             EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_with_limit;
@@ -306,6 +369,7 @@ int main(int argc, char **argv)
             EXPECT_EQUAL(s2n_atomic_flag_test(&client_conn->key_update_pending), false);
             EXPECT_BYTEARRAY_EQUAL(client_conn->secure->client_sequence_number, zeroed_sequence_number, S2N_TLS_SEQUENCE_NUM_LEN);
             EXPECT_TRUE(s2n_stuffer_data_available(&stuffer) > 0);
+            EXPECT_EQUAL(client_conn->send_key_updated, 1);
 
             EXPECT_SUCCESS(s2n_stuffer_free(&stuffer));
             EXPECT_SUCCESS(s2n_connection_free(client_conn));
@@ -340,7 +404,7 @@ int main(int argc, char **argv)
 
         /* Key update is not triggered */
         {
-            struct s2n_connection *client_conn;
+            struct s2n_connection *client_conn = NULL;
             EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
             client_conn->actual_protocol_version = S2N_TLS13;
             client_conn->secure->cipher_suite = cipher_suite_with_limit;
@@ -441,6 +505,30 @@ int main(int argc, char **argv)
             }
 
             EXPECT_EQUAL(key_update_seq_num, expected);
+        };
+
+        /* KeyUpdate fails if ktls */
+        {
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_CLIENT),
+                    s2n_connection_ptr_free);
+            conn->actual_protocol_version = S2N_TLS13;
+            conn->ktls_send_enabled = true;
+
+            /* Passes if no KeyUpdate required */
+            s2n_blocked_status blocked = 0;
+            EXPECT_SUCCESS(s2n_key_update_send(conn, &blocked));
+            EXPECT_FALSE(s2n_atomic_flag_test(&conn->key_update_pending));
+
+            /* Set encryption limit */
+            EXPECT_NOT_NULL(conn->secure);
+            conn->secure->cipher_suite = cipher_suite_with_limit;
+            EXPECT_OK(s2n_write_uint64(record_limit, conn->secure->client_sequence_number));
+
+            /* Fails if KeyUpdate required */
+            EXPECT_FAILURE_WITH_ERRNO(
+                    s2n_key_update_send(conn, &blocked),
+                    S2N_ERR_KTLS_KEY_LIMIT);
+            EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
         };
     };
 
@@ -588,6 +676,28 @@ int main(int argc, char **argv)
             EXPECT_TRUE(cipher_suite->record_alg->encryption_limit > 0);
         }
     }
+
+    /* s2n_connection_key_update_requested */
+    {
+        /* null safety */
+        {
+            EXPECT_FAILURE_WITH_ERRNO(s2n_connection_request_key_update(NULL, S2N_KEY_UPDATE_NOT_REQUESTED), S2N_ERR_NULL);
+        };
+
+        /* usage */
+        {
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_SERVER), s2n_connection_ptr_free);
+            EXPECT_FAILURE_WITH_ERRNO(s2n_connection_request_key_update(conn, S2N_KEY_UPDATE_REQUESTED), S2N_ERR_INVALID_ARGUMENT);
+        };
+
+        /* happy path */
+        {
+            DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_SERVER), s2n_connection_ptr_free);
+            EXPECT_FALSE(s2n_atomic_flag_test(&conn->key_update_pending));
+            EXPECT_SUCCESS(s2n_connection_request_key_update(conn, S2N_KEY_UPDATE_NOT_REQUESTED));
+            EXPECT_TRUE(s2n_atomic_flag_test(&conn->key_update_pending));
+        };
+    };
 
     END_TEST();
 }

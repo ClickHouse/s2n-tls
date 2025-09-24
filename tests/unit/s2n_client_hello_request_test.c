@@ -24,27 +24,6 @@ static const uint8_t hello_request_msg[] = {
     /* empty message body */
 };
 
-static S2N_RESULT s2n_test_send_and_recv(struct s2n_connection *send_conn, struct s2n_connection *recv_conn)
-{
-    RESULT_ENSURE_REF(send_conn);
-    RESULT_ENSURE_REF(recv_conn);
-
-    s2n_blocked_status blocked = S2N_NOT_BLOCKED;
-
-    const uint8_t send_data[] = "hello world";
-    ssize_t send_size = s2n_send(send_conn, send_data, sizeof(send_data), &blocked);
-    RESULT_GUARD_POSIX(send_size);
-    RESULT_ENSURE_EQ(send_size, sizeof(send_data));
-
-    uint8_t recv_data[sizeof(send_data)] = { 0 };
-    ssize_t recv_size = s2n_recv(recv_conn, recv_data, send_size, &blocked);
-    RESULT_GUARD_POSIX(recv_size);
-    RESULT_ENSURE_EQ(recv_size, send_size);
-    EXPECT_BYTEARRAY_EQUAL(recv_data, send_data, send_size);
-
-    return S2N_RESULT_OK;
-}
-
 static S2N_RESULT s2n_send_client_hello_request(struct s2n_connection *server_conn)
 {
     RESULT_ENSURE_REF(server_conn);
@@ -97,13 +76,13 @@ int main(int argc, char **argv)
 
     DEFER_CLEANUP(struct s2n_config *config = s2n_config_new(), s2n_config_ptr_free);
     EXPECT_NOT_NULL(config);
-    EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config, "default"));
+    EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config, "20240501"));
     EXPECT_SUCCESS(s2n_config_set_unsafe_for_testing(config));
     EXPECT_SUCCESS(s2n_config_add_cert_chain_and_key_to_store(config, chain_and_key));
 
     DEFER_CLEANUP(struct s2n_config *config_with_reneg_cb = s2n_config_new(), s2n_config_ptr_free);
     EXPECT_NOT_NULL(config_with_reneg_cb);
-    EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config_with_reneg_cb, "default"));
+    EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config_with_reneg_cb, "20240501"));
     EXPECT_SUCCESS(s2n_config_set_unsafe_for_testing(config_with_reneg_cb));
     EXPECT_SUCCESS(s2n_config_add_cert_chain_and_key_to_store(config_with_reneg_cb, chain_and_key));
     EXPECT_SUCCESS(s2n_config_set_renegotiate_request_cb(config_with_reneg_cb, s2n_test_reneg_req_cb, NULL));
@@ -188,7 +167,7 @@ int main(int argc, char **argv)
     {
         DEFER_CLEANUP(struct s2n_config *config_with_warns = s2n_config_new(), s2n_config_ptr_free);
         EXPECT_NOT_NULL(config_with_warns);
-        EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config_with_warns, "default"));
+        EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config_with_warns, "20240501"));
         EXPECT_SUCCESS(s2n_config_set_unsafe_for_testing(config_with_warns));
         EXPECT_SUCCESS(s2n_config_add_cert_chain_and_key_to_store(config_with_warns, chain_and_key));
         EXPECT_SUCCESS(s2n_config_set_alert_behavior(config_with_warns, S2N_ALERT_IGNORE_WARNINGS));
@@ -213,16 +192,16 @@ int main(int argc, char **argv)
         EXPECT_TRUE(client_conn->secure_renegotiation);
 
         /* Send some data */
-        EXPECT_OK(s2n_test_send_and_recv(server_conn, client_conn));
-        EXPECT_OK(s2n_test_send_and_recv(client_conn, server_conn));
+        EXPECT_OK(s2n_send_and_recv_test(server_conn, client_conn));
+        EXPECT_OK(s2n_send_and_recv_test(client_conn, server_conn));
 
         /* Send the hello request message. */
         EXPECT_OK(s2n_send_client_hello_request(server_conn));
 
         /* Send some more data */
         for (size_t i = 0; i < 10; i++) {
-            EXPECT_OK(s2n_test_send_and_recv(server_conn, client_conn));
-            EXPECT_OK(s2n_test_send_and_recv(client_conn, server_conn));
+            EXPECT_OK(s2n_send_and_recv_test(server_conn, client_conn));
+            EXPECT_OK(s2n_send_and_recv_test(client_conn, server_conn));
             EXPECT_TRUE(s2n_connection_check_io_status(client_conn, S2N_IO_FULL_DUPLEX));
         }
     };
@@ -230,7 +209,7 @@ int main(int argc, char **argv)
     /* Test: Hello requests received after the handshake do NOT trigger a no_renegotiation alert
      * if renegotiation callbacks not set.
      *
-     *= https://tools.ietf.org/rfc/rfc5246#section-7.4.1.1
+     *= https://www.rfc-editor.org/rfc/rfc5246#section-7.4.1.1
      *= type=test
      *# This message MAY be ignored by
      *# the client if it does not wish to renegotiate a session, or the
@@ -261,8 +240,8 @@ int main(int argc, char **argv)
         EXPECT_OK(s2n_send_client_hello_request(server_conn));
 
         /* no_renegotation alert NOT sent and received */
-        EXPECT_OK(s2n_test_send_and_recv(server_conn, client_conn));
-        EXPECT_OK(s2n_test_send_and_recv(client_conn, server_conn));
+        EXPECT_OK(s2n_send_and_recv_test(server_conn, client_conn));
+        EXPECT_OK(s2n_send_and_recv_test(client_conn, server_conn));
 
         /* Callback was not set */
         EXPECT_NULL(client_conn->config->renegotiate_request_cb);
@@ -271,12 +250,12 @@ int main(int argc, char **argv)
     /* Test: Hello requests received after the handshake trigger a no_renegotiation alert
      * if the application rejects the renegotiation request
      *
-     *= https://tools.ietf.org/rfc/rfc5746#5
+     *= https://www.rfc-editor.org/rfc/rfc5746#5
      *= type=test
      *# TLS implementations SHOULD provide a mechanism to disable and enable
      *# renegotiation.
      *
-     *= https://tools.ietf.org/rfc/rfc5246#section-7.4.1.1
+     *= https://www.rfc-editor.org/rfc/rfc5246#section-7.4.1.1
      *= type=test
      *# This message MAY be ignored by
      *# the client if it does not wish to renegotiate a session, or the
@@ -309,8 +288,8 @@ int main(int argc, char **argv)
         EXPECT_OK(s2n_send_client_hello_request(server_conn));
 
         /* no_renegotation alert sent and received */
-        EXPECT_OK(s2n_test_send_and_recv(server_conn, client_conn));
-        EXPECT_ERROR_WITH_ERRNO(s2n_test_send_and_recv(client_conn, server_conn), S2N_ERR_ALERT);
+        EXPECT_OK(s2n_send_and_recv_test(server_conn, client_conn));
+        EXPECT_ERROR_WITH_ERRNO(s2n_send_and_recv_test(client_conn, server_conn), S2N_ERR_ALERT);
         EXPECT_EQUAL(s2n_connection_get_alert(server_conn), S2N_TLS_ALERT_NO_RENEGOTIATION);
 
         /* Callback triggered */
@@ -321,7 +300,7 @@ int main(int argc, char **argv)
     /* Test: Hello requests received after the handshake do not trigger a no_renegotiation alert
      * if the application accepts the renegotiation request
      *
-     *= https://tools.ietf.org/rfc/rfc5746#5
+     *= https://www.rfc-editor.org/rfc/rfc5746#5
      *= type=test
      *# TLS implementations SHOULD provide a mechanism to disable and enable
      *# renegotiation.
@@ -353,8 +332,8 @@ int main(int argc, char **argv)
         EXPECT_OK(s2n_send_client_hello_request(server_conn));
 
         /* no_renegotation alert NOT sent and received */
-        EXPECT_OK(s2n_test_send_and_recv(server_conn, client_conn));
-        EXPECT_OK(s2n_test_send_and_recv(client_conn, server_conn));
+        EXPECT_OK(s2n_send_and_recv_test(server_conn, client_conn));
+        EXPECT_OK(s2n_send_and_recv_test(client_conn, server_conn));
 
         /* Callback triggered */
         EXPECT_NOT_NULL(client_conn->config->renegotiate_request_cb);
@@ -391,8 +370,8 @@ int main(int argc, char **argv)
         EXPECT_OK(s2n_send_client_hello_request(server_conn));
 
         /* no_renegotation alert NOT sent and received */
-        EXPECT_OK(s2n_test_send_and_recv(server_conn, client_conn));
-        EXPECT_OK(s2n_test_send_and_recv(client_conn, server_conn));
+        EXPECT_OK(s2n_send_and_recv_test(server_conn, client_conn));
+        EXPECT_OK(s2n_send_and_recv_test(client_conn, server_conn));
 
         /* Callback triggered */
         EXPECT_NOT_NULL(client_conn->config->renegotiate_request_cb);
@@ -402,7 +381,7 @@ int main(int argc, char **argv)
     /* Test: Hello requests received after the handshake trigger a no_renegotiation alert
      * if secure renegotiation is not supported, even if the application would have accepted the request.
      *
-     *= https://tools.ietf.org/rfc/rfc5746#section-4.2
+     *= https://www.rfc-editor.org/rfc/rfc5746#section-4.2
      *= type=test
      *# This text applies if the connection's "secure_renegotiation" flag is
      *# set to FALSE.
@@ -445,8 +424,8 @@ int main(int argc, char **argv)
         EXPECT_OK(s2n_send_client_hello_request(server_conn));
 
         /* no_renegotation alert sent and received */
-        EXPECT_OK(s2n_test_send_and_recv(server_conn, client_conn));
-        EXPECT_ERROR_WITH_ERRNO(s2n_test_send_and_recv(client_conn, server_conn), S2N_ERR_ALERT);
+        EXPECT_OK(s2n_send_and_recv_test(server_conn, client_conn));
+        EXPECT_ERROR_WITH_ERRNO(s2n_send_and_recv_test(client_conn, server_conn), S2N_ERR_ALERT);
         EXPECT_EQUAL(s2n_connection_get_alert(server_conn), S2N_TLS_ALERT_NO_RENEGOTIATION);
 
         /* Callback was not triggered */
@@ -491,12 +470,12 @@ int main(int argc, char **argv)
          * Applications won't be able to set s2n_errno to a meaningful value,
          * so we need to set it to S2N_ERR_CANCELED for them.
          */
-        EXPECT_ERROR_WITH_ERRNO(s2n_test_send_and_recv(server_conn, client_conn), S2N_ERR_CANCELLED);
+        EXPECT_ERROR_WITH_ERRNO(s2n_send_and_recv_test(server_conn, client_conn), S2N_ERR_CANCELLED);
     };
 
     /* Test: SSLv3 sends a fatal handshake_failure alert instead of no_renegotiate
      *
-     *= https://tools.ietf.org/rfc/rfc5746#4.5
+     *= https://www.rfc-editor.org/rfc/rfc5746#4.5
      *= type=test
      *# SSLv3 does not define the "no_renegotiation" alert (and does
      *# not offer a way to indicate a refusal to renegotiate at a "warning"

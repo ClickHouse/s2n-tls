@@ -36,7 +36,7 @@ int s2n_cert_set_cert_type(struct s2n_cert *cert, s2n_pkey_type pkey_type)
 {
     POSIX_ENSURE_REF(cert);
     cert->pkey_type = pkey_type;
-    POSIX_GUARD(s2n_pkey_setup_for_type(&cert->public_key, pkey_type));
+    POSIX_GUARD_RESULT(s2n_pkey_setup_for_type(&cert->public_key, pkey_type));
     return 0;
 }
 
@@ -47,44 +47,30 @@ int s2n_create_cert_chain_from_stuffer(struct s2n_cert_chain *cert_chain_out, st
 
     struct s2n_cert **insert = &cert_chain_out->head;
     uint32_t chain_size = 0;
-    do {
-        struct s2n_cert *new_node = NULL;
+    while (s2n_stuffer_has_pem_encapsulated_block(chain_in_stuffer)) {
+        int result = s2n_stuffer_certificate_from_pem(chain_in_stuffer, &cert_out_stuffer);
+        POSIX_ENSURE(result == S2N_SUCCESS, S2N_ERR_INVALID_PEM);
 
-        if (s2n_stuffer_certificate_from_pem(chain_in_stuffer, &cert_out_stuffer) < 0) {
-            if (chain_size == 0) {
-                POSIX_BAIL(S2N_ERR_NO_CERTIFICATE_IN_PEM);
-            }
-            break;
-        }
-        struct s2n_blob mem = { 0 };
+        DEFER_CLEANUP(struct s2n_blob mem = { 0 }, s2n_free);
         POSIX_GUARD(s2n_alloc(&mem, sizeof(struct s2n_cert)));
-        new_node = (struct s2n_cert *) (void *) mem.data;
+        POSIX_GUARD(s2n_blob_zero(&mem));
 
-        if (s2n_alloc(&new_node->raw, s2n_stuffer_data_available(&cert_out_stuffer)) != S2N_SUCCESS) {
-            POSIX_GUARD(s2n_free(&mem));
-            S2N_ERROR_PRESERVE_ERRNO();
-        }
-        if (s2n_stuffer_read(&cert_out_stuffer, &new_node->raw) != S2N_SUCCESS) {
-            POSIX_GUARD(s2n_free(&mem));
-            S2N_ERROR_PRESERVE_ERRNO();
-        }
+        struct s2n_cert *new_node = (struct s2n_cert *) (void *) mem.data;
+        POSIX_GUARD(s2n_alloc(&new_node->raw, s2n_stuffer_data_available(&cert_out_stuffer)));
+        POSIX_GUARD(s2n_stuffer_read(&cert_out_stuffer, &new_node->raw));
+        ZERO_TO_DISABLE_DEFER_CLEANUP(mem);
 
         /* Additional 3 bytes for the length field in the protocol */
         chain_size += new_node->raw.size + 3;
         new_node->next = NULL;
         *insert = new_node;
         insert = &new_node->next;
-    } while (s2n_stuffer_data_available(chain_in_stuffer));
+    };
 
-    /* Leftover data at this point means one of two things:
-     * A bug in s2n's PEM parsing OR a malformed PEM in the user's chain.
-     * Be conservative and fail instead of using a partial chain.
-     */
-    S2N_ERROR_IF(s2n_stuffer_data_available(chain_in_stuffer) > 0, S2N_ERR_INVALID_PEM);
-
+    POSIX_ENSURE(chain_size > 0, S2N_ERR_NO_CERTIFICATE_IN_PEM);
     cert_chain_out->chain_size = chain_size;
 
-    return 0;
+    return S2N_SUCCESS;
 }
 
 int s2n_cert_chain_and_key_set_cert_chain_from_stuffer(struct s2n_cert_chain_and_key *cert_and_key, struct s2n_stuffer *chain_in_stuffer)
@@ -121,13 +107,13 @@ int s2n_cert_chain_and_key_set_private_key_from_stuffer(struct s2n_cert_chain_an
     POSIX_GUARD(s2n_pkey_zero_init(cert_and_key->private_key));
 
     /* Convert pem to asn1 and asn1 to the private key. Handles both PKCS#1 and PKCS#8 formats */
-    int type = 0;
-    POSIX_GUARD(s2n_stuffer_private_key_from_pem(key_in_stuffer, key_out_stuffer, &type));
+    int type_hint = 0;
+    POSIX_GUARD(s2n_stuffer_private_key_from_pem(key_in_stuffer, key_out_stuffer, &type_hint));
     key_blob.size = s2n_stuffer_data_available(key_out_stuffer);
     key_blob.data = s2n_stuffer_raw_read(key_out_stuffer, key_blob.size);
     POSIX_ENSURE_REF(key_blob.data);
 
-    POSIX_GUARD(s2n_asn1der_to_private_key(cert_and_key->private_key, &key_blob, type));
+    POSIX_GUARD_RESULT(s2n_asn1der_to_private_key(cert_and_key->private_key, &key_blob, type_hint));
     return S2N_SUCCESS;
 }
 
@@ -224,6 +210,7 @@ DEFINE_POINTER_CLEANUP_FUNC(GENERAL_NAMES *, GENERAL_NAMES_free);
 int s2n_cert_chain_and_key_load_sans(struct s2n_cert_chain_and_key *chain_and_key, X509 *x509_cert)
 {
     POSIX_ENSURE_REF(chain_and_key->san_names);
+    POSIX_ENSURE_REF(x509_cert);
 
     DEFER_CLEANUP(GENERAL_NAMES *san_names = X509_get_ext_d2i(x509_cert, NID_subject_alt_name, NULL, NULL), GENERAL_NAMES_free_pointer);
     if (san_names == NULL) {
@@ -276,6 +263,7 @@ DEFINE_POINTER_CLEANUP_FUNC(unsigned char *, OPENSSL_free);
 int s2n_cert_chain_and_key_load_cns(struct s2n_cert_chain_and_key *chain_and_key, X509 *x509_cert)
 {
     POSIX_ENSURE_REF(chain_and_key->cn_names);
+    POSIX_ENSURE_REF(x509_cert);
 
     X509_NAME *subject = X509_get_subject_name(x509_cert);
     if (!subject) {
@@ -334,22 +322,14 @@ int s2n_cert_chain_and_key_load_cns(struct s2n_cert_chain_and_key *chain_and_key
     return 0;
 }
 
-static int s2n_cert_chain_and_key_set_names(struct s2n_cert_chain_and_key *chain_and_key, struct s2n_blob *leaf_bytes)
+static int s2n_cert_chain_and_key_set_names(struct s2n_cert_chain_and_key *chain_and_key, X509 *cert)
 {
-    const unsigned char *leaf_der = leaf_bytes->data;
-    X509 *cert = d2i_X509(NULL, &leaf_der, leaf_bytes->size);
-    if (!cert) {
-        POSIX_BAIL(S2N_ERR_INVALID_PEM);
-    }
-
     POSIX_GUARD(s2n_cert_chain_and_key_load_sans(chain_and_key, cert));
     /* For current use cases, we *could* avoid populating the common names if any sans were loaded in
      * s2n_cert_chain_and_key_load_sans. Let's unconditionally populate this field to avoid surprises
      * in the future.
      */
     POSIX_GUARD(s2n_cert_chain_and_key_load_cns(chain_and_key, cert));
-
-    X509_free(cert);
     return 0;
 }
 
@@ -361,10 +341,15 @@ int s2n_cert_chain_and_key_load(struct s2n_cert_chain_and_key *chain_and_key)
     POSIX_ENSURE_REF(chain_and_key->private_key);
     struct s2n_cert *head = chain_and_key->cert_chain->head;
 
+    DEFER_CLEANUP(X509 *leaf_cert = NULL, X509_free_pointer);
+    POSIX_GUARD_RESULT(s2n_openssl_x509_parse(&head->raw, &leaf_cert));
+    POSIX_GUARD_RESULT(s2n_openssl_x509_get_cert_info(leaf_cert, &head->info));
+
     /* Parse the leaf cert for the public key and certificate type */
     DEFER_CLEANUP(struct s2n_pkey public_key = { 0 }, s2n_pkey_free);
     s2n_pkey_type pkey_type = S2N_PKEY_TYPE_UNKNOWN;
-    POSIX_GUARD(s2n_asn1der_to_public_key_and_type(&public_key, &pkey_type, &head->raw));
+    POSIX_GUARD_RESULT(s2n_pkey_from_x509(leaf_cert, &public_key, &pkey_type));
+
     POSIX_ENSURE(pkey_type != S2N_PKEY_TYPE_UNKNOWN, S2N_ERR_CERT_TYPE_UNSUPPORTED);
     POSIX_GUARD(s2n_cert_set_cert_type(head, pkey_type));
 
@@ -374,14 +359,16 @@ int s2n_cert_chain_and_key_load(struct s2n_cert_chain_and_key *chain_and_key)
     }
 
     /* Populate name information from the SAN/CN for the leaf certificate */
-    POSIX_GUARD(s2n_cert_chain_and_key_set_names(chain_and_key, &head->raw));
+    POSIX_GUARD(s2n_cert_chain_and_key_set_names(chain_and_key, leaf_cert));
 
-    /* Populate ec curve libcrypto nid */
-    if (pkey_type == S2N_PKEY_TYPE_ECDSA) {
-        int nid = EC_GROUP_get_curve_name(EC_KEY_get0_group(public_key.key.ecdsa_key.ec_key));
-        POSIX_ENSURE(nid > 0, S2N_ERR_CERT_TYPE_UNSUPPORTED);
-        POSIX_ENSURE(nid < UINT16_MAX, S2N_ERR_CERT_TYPE_UNSUPPORTED);
-        head->ec_curve_nid = nid;
+    /* populate libcrypto nid's required for cert restrictions */
+    struct s2n_cert *current = head->next;
+    while (current != NULL) {
+        DEFER_CLEANUP(X509 *parsed_cert = NULL, X509_free_pointer);
+        POSIX_GUARD_RESULT(s2n_openssl_x509_parse(&current->raw, &parsed_cert));
+        POSIX_GUARD_RESULT(s2n_openssl_x509_get_cert_info(parsed_cert, &current->info));
+
+        current = current->next;
     }
 
     return S2N_SUCCESS;

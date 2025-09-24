@@ -94,12 +94,15 @@ int main(int argc, char **argv)
         EXPECT_OK(s2n_psk_init(&psk, S2N_PSK_TYPE_EXTERNAL));
 
         uint8_t test_value_1[] = TEST_VALUE_1;
+        uint8_t all_zero_value[5] = { 0 };
 
         EXPECT_FAILURE_WITH_ERRNO(s2n_psk_set_secret(NULL, test_value_1, 1),
                 S2N_ERR_NULL);
         EXPECT_FAILURE_WITH_ERRNO(s2n_psk_set_secret(&psk, NULL, 1),
                 S2N_ERR_NULL);
         EXPECT_FAILURE_WITH_ERRNO(s2n_psk_set_secret(&psk, test_value_1, 0),
+                S2N_ERR_INVALID_ARGUMENT);
+        EXPECT_FAILURE_WITH_ERRNO(s2n_psk_set_secret(&psk, all_zero_value, s2n_array_len(all_zero_value)),
                 S2N_ERR_INVALID_ARGUMENT);
 
         EXPECT_SUCCESS(s2n_psk_set_secret(&psk, test_value_1, sizeof(test_value_1)));
@@ -338,7 +341,7 @@ int main(int argc, char **argv)
          * There are no available test vectors for multiple PSKs, but we should at least
          * verify that we write something relatively sane for this use case. */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             struct s2n_stuffer out = { 0 };
@@ -376,7 +379,7 @@ int main(int argc, char **argv)
 
         /* On a retry, do not write binders for PSKs that do not match the cipher suite.
          *
-         *= https://tools.ietf.org/rfc/rfc8446#section-4.1.4
+         *= https://www.rfc-editor.org/rfc/rfc8446#section-4.1.4
          *= type=test
          *# In addition, in its updated ClientHello, the client SHOULD NOT offer
          *# any pre-shared keys associated with a hash other than that of the
@@ -385,7 +388,7 @@ int main(int argc, char **argv)
          *# ClientHello.
          */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
             conn->handshake.handshake_type = HELLO_RETRY_REQUEST;
             conn->secure->cipher_suite = &s2n_tls13_aes_128_gcm_sha256;
@@ -479,7 +482,7 @@ int main(int argc, char **argv)
 
         /* Test s2n_psk_calculate_binder_hash with known values */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             struct s2n_blob hash_value = { 0 };
@@ -509,7 +512,7 @@ int main(int argc, char **argv)
 
         /* Test s2n_psk_verify_binder with known values */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             DEFER_CLEANUP(struct s2n_psk test_psk, s2n_psk_wipe);
@@ -528,7 +531,7 @@ int main(int argc, char **argv)
 
         /* Test s2n_psk_verify_binder with incorrect binder */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             DEFER_CLEANUP(struct s2n_psk test_psk, s2n_psk_wipe);
@@ -549,7 +552,7 @@ int main(int argc, char **argv)
 
         /* Test s2n_psk_write_binder with known values */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             DEFER_CLEANUP(struct s2n_psk psk = { 0 }, s2n_psk_wipe);
@@ -566,7 +569,7 @@ int main(int argc, char **argv)
             EXPECT_EQUAL(binder_size, s2n_stuffer_data_available(&out));
             EXPECT_EQUAL(binder_size, finished_binder.size);
 
-            uint8_t *binder_data;
+            uint8_t *binder_data = NULL;
             EXPECT_NOT_NULL(binder_data = s2n_stuffer_raw_read(&out, binder_size));
             EXPECT_BYTEARRAY_EQUAL(binder_data, finished_binder.data, binder_size);
 
@@ -576,7 +579,7 @@ int main(int argc, char **argv)
 
         /* Test s2n_psk_write_binder_list with known values */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             struct s2n_psk *psk = NULL;
@@ -599,7 +602,7 @@ int main(int argc, char **argv)
             EXPECT_EQUAL(binder_size, s2n_stuffer_data_available(&out));
             EXPECT_EQUAL(binder_size, finished_binder.size);
 
-            uint8_t *binder_data;
+            uint8_t *binder_data = NULL;
             EXPECT_NOT_NULL(binder_data = s2n_stuffer_raw_read(&out, binder_size));
             EXPECT_BYTEARRAY_EQUAL(binder_data, finished_binder.data, binder_size);
 
@@ -611,7 +614,7 @@ int main(int argc, char **argv)
         {
             const uint8_t psk_count = 5;
 
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             for (uint8_t i = 0; i < psk_count; i++) {
@@ -636,7 +639,7 @@ int main(int argc, char **argv)
                 EXPECT_SUCCESS(s2n_stuffer_read_uint8(&out, &binder_size));
                 EXPECT_EQUAL(binder_size, finished_binder.size);
 
-                uint8_t *binder_data;
+                uint8_t *binder_data = NULL;
                 EXPECT_NOT_NULL(binder_data = s2n_stuffer_raw_read(&out, binder_size));
                 EXPECT_BYTEARRAY_EQUAL(binder_data, finished_binder.data, binder_size);
             }
@@ -649,7 +652,7 @@ int main(int argc, char **argv)
 
         /* Test s2n_psk_write_binder_list with multiple hash algs */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             for (s2n_hmac_algorithm hmac_alg = S2N_HMAC_SHA256; hmac_alg <= S2N_HMAC_SHA384; hmac_alg++) {
@@ -678,7 +681,7 @@ int main(int argc, char **argv)
                 EXPECT_SUCCESS(s2n_stuffer_read_uint8(&out, &binder_size));
                 EXPECT_EQUAL(binder_size, hash_size);
 
-                uint8_t *binder_data;
+                uint8_t *binder_data = NULL;
                 EXPECT_NOT_NULL(binder_data = s2n_stuffer_raw_read(&out, binder_size));
                 /* We can only actually verify the result for SHA256; we don't have known
                  * values for any other hash. */
@@ -695,7 +698,7 @@ int main(int argc, char **argv)
 
         /* Test s2n_finish_psk_extension with known values */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             EXPECT_SUCCESS(s2n_stuffer_write(&conn->handshake.io, &client_hello_prefix));
@@ -732,7 +735,7 @@ int main(int argc, char **argv)
 
         /* Safety checks */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             EXPECT_FAILURE_WITH_ERRNO(s2n_connection_append_psk(NULL, input_psk), S2N_ERR_NULL);
@@ -743,7 +746,7 @@ int main(int argc, char **argv)
 
         /* Append valid PSK to empty list */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             EXPECT_SUCCESS(s2n_connection_append_psk(conn, input_psk));
@@ -766,7 +769,7 @@ int main(int argc, char **argv)
 
         /* Original PSK can be safely freed after being added to a connection */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             struct s2n_psk *original_psk = s2n_external_psk_new();
@@ -794,27 +797,44 @@ int main(int argc, char **argv)
 
         /* Invalid PSK not added to connection */
         {
-            struct s2n_connection *conn;
-            EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
-
             /* PSK is invalid because it has no identity */
-            DEFER_CLEANUP(struct s2n_psk *invalid_psk = s2n_external_psk_new(), s2n_psk_free);
-            EXPECT_SUCCESS(s2n_psk_set_secret(invalid_psk, secret_0, sizeof(secret_0)));
+            {
+                DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_CLIENT), s2n_connection_ptr_free);
+                EXPECT_NOT_NULL(conn);
 
-            EXPECT_FAILURE_WITH_ERRNO(s2n_connection_append_psk(conn, invalid_psk),
-                    S2N_ERR_INVALID_ARGUMENT);
-            EXPECT_EQUAL(conn->psk_params.psk_list.len, 0);
+                DEFER_CLEANUP(struct s2n_psk *invalid_psk = s2n_external_psk_new(), s2n_psk_free);
+                EXPECT_SUCCESS(s2n_psk_set_secret(invalid_psk, secret_0, sizeof(secret_0)));
 
-            /* Successful if identity added to PSK, making it valid */
-            EXPECT_SUCCESS(s2n_psk_set_identity(invalid_psk, identity_0, sizeof(identity_0)));
-            EXPECT_SUCCESS(s2n_connection_append_psk(conn, invalid_psk));
+                EXPECT_FAILURE_WITH_ERRNO(s2n_connection_append_psk(conn, invalid_psk),
+                        S2N_ERR_INVALID_ARGUMENT);
+                EXPECT_EQUAL(conn->psk_params.psk_list.len, 0);
 
-            EXPECT_SUCCESS(s2n_connection_free(conn));
+                /* Successful if identity added to PSK, making it valid */
+                EXPECT_SUCCESS(s2n_psk_set_identity(invalid_psk, identity_0, sizeof(identity_0)));
+                EXPECT_SUCCESS(s2n_connection_append_psk(conn, invalid_psk));
+            };
+
+            /* PSK is invalid because it has no secret */
+            {
+                DEFER_CLEANUP(struct s2n_connection *conn = s2n_connection_new(S2N_CLIENT), s2n_connection_ptr_free);
+                EXPECT_NOT_NULL(conn);
+
+                DEFER_CLEANUP(struct s2n_psk *invalid_psk = s2n_external_psk_new(), s2n_psk_free);
+                EXPECT_SUCCESS(s2n_psk_set_identity(invalid_psk, identity_0, sizeof(identity_0)));
+
+                EXPECT_FAILURE_WITH_ERRNO(s2n_connection_append_psk(conn, invalid_psk),
+                        S2N_ERR_INVALID_ARGUMENT);
+                EXPECT_EQUAL(conn->psk_params.psk_list.len, 0);
+
+                /* Successful if secret added to PSK, making it valid */
+                EXPECT_SUCCESS(s2n_psk_set_secret(invalid_psk, secret_0, sizeof(secret_0)));
+                EXPECT_SUCCESS(s2n_connection_append_psk(conn, invalid_psk));
+            };
         };
 
         /* Huge PSK not added to client connection */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             DEFER_CLEANUP(struct s2n_psk *invalid_psk = s2n_external_psk_new(), s2n_psk_free);
@@ -844,7 +864,7 @@ int main(int argc, char **argv)
 
         /* Huge PSK added to server connection */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_SERVER));
 
             DEFER_CLEANUP(struct s2n_psk *invalid_psk = s2n_external_psk_new(), s2n_psk_free);
@@ -861,7 +881,7 @@ int main(int argc, char **argv)
 
         /* New PSK would make existing list too long for client */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             uint32_t offered_psks_size = 0;
@@ -897,7 +917,7 @@ int main(int argc, char **argv)
 
         /* PSK matches existing external PSK */
         {
-            struct s2n_connection *conn;
+            struct s2n_connection *conn = NULL;
             EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_CLIENT));
 
             EXPECT_SUCCESS(s2n_connection_append_psk(conn, input_psk));
